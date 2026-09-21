@@ -29,7 +29,10 @@ Create (or remove) a `cswap` launcher next to the `aswap` command, so `cswap`
 runs this install instead of upstream claude-swap.
 
   --status   show what `cswap` currently resolves to
-  --force    replace (or remove) a `cswap` that aswap did not create
+  --force    replace (or remove) a `cswap` that no aswap install created
+
+A `cswap` left by another aswap install (a development build, a previous
+install) is relinked without --force.
 """
 
 
@@ -46,7 +49,8 @@ def _own_launcher() -> Path:
 
 
 def _links_to(target: Path, launcher: Path) -> bool:
-    """Whether ``target`` is a launcher aswap created for ``launcher``."""
+    """Whether ``target`` is a launcher aswap created for ``launcher``: this
+    very install."""
     try:
         if target.is_symlink():
             return target.resolve() == launcher.resolve()
@@ -57,12 +61,45 @@ def _links_to(target: Path, launcher: Path) -> bool:
     return False
 
 
+def _is_aswap_launcher(target: Path) -> bool:
+    """Whether ``target`` is a launcher SOME aswap created: this install, a
+    development one, one that has since been uninstalled (dangling link).
+    Such a launcher is ours to replace without ``--force``; only a ``cswap``
+    that belongs to upstream claude-swap or another tool is not."""
+    try:
+        if target.is_symlink():
+            # The link text survives even when the launcher it names is gone.
+            if Path(os.readlink(target)).name in ("aswap", "aswap.exe"):
+                return True
+        resolved = target.resolve()
+        if resolved.name in ("aswap", "aswap.exe"):
+            return True
+        if resolved.is_file():
+            # The console script of any aswap install imports our entry point.
+            return b"from aswap.cli import main" in resolved.read_bytes()[:4096]
+    except OSError:
+        pass
+    return False
+
+
+def _describe(target: Path) -> str:
+    """Where ``target`` currently points, for messages."""
+    try:
+        if target.is_symlink():
+            return os.readlink(target)
+    except OSError:
+        pass
+    return str(target)
+
+
 def _status(target: Path, launcher: Path) -> int:
     on_path = shutil.which("cswap")
     if not target.exists() and not target.is_symlink():
         print(f"cswap: not linked (would be created at {target})")
     elif _links_to(target, launcher):
         print(f"cswap -> {launcher}  (linked by aswap)")
+    elif _is_aswap_launcher(target):
+        print(f"cswap -> {_describe(target)}  (linked by another aswap install; run `aswap link` to point it here)")
     else:
         print(f"cswap at {target} is not aswap's (upstream claude-swap or another tool)")
     if on_path and Path(on_path).absolute() != target:
@@ -79,8 +116,11 @@ def _link(force: bool) -> int:
     if _links_to(target, launcher):
         print(f"cswap already runs aswap ({target})")
         return 0
+    previous = None
     if target.exists() or target.is_symlink():
-        if not force:
+        if _is_aswap_launcher(target):
+            previous = _describe(target)  # another aswap install's launcher: ours to replace
+        elif not force:
             print(
                 f"error: {target} exists and is not aswap's.\n"
                 "If it is upstream claude-swap, remove it first (uv tool uninstall claude-swap "
@@ -93,7 +133,10 @@ def _link(force: bool) -> int:
         shutil.copy2(launcher, target)
     else:
         os.symlink(launcher.name, target)
-    print(f"linked: {target} -> {launcher.name}")
+    if previous is None:
+        print(f"linked: {target} -> {launcher.name}")
+    else:
+        print(f"relinked: {target} -> {launcher.name}  (was -> {previous}, another aswap install)")
     other = shutil.which("cswap")
     if other and Path(other).absolute() != target:
         print(f"note: `cswap` on PATH still resolves to {other} first; remove it or reorder PATH")
@@ -106,7 +149,7 @@ def _unlink(force: bool) -> int:
     if not target.exists() and not target.is_symlink():
         print("cswap is not linked")
         return 0
-    if not _links_to(target, launcher) and not force:
+    if not _is_aswap_launcher(target) and not force:
         print(f"error: {target} was not created by aswap; pass --force to remove it anyway", file=sys.stderr)
         return 1
     target.unlink()

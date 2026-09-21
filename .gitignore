@@ -5,3 +5,4 @@ dist/
 
 # upstream checkout, cloned by "bun run setup" at the commit pinned in upstream.json
 cswap/
+__pycache__/

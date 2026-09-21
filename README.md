@@ -27,7 +27,7 @@ aswap --version
 aswap link  # creates a cswap launcher next to aswap; aswap unlink removes it
 ```
 
-`aswap link` only replaces a `cswap` that it created. Uninstall upstream first (`uv tool uninstall claude-swap`) or pass `--force`.
+`aswap link` only replaces a `cswap` that an aswap install created (this one, a development build, a previous install). For an upstream `cswap`, uninstall upstream first (`uv tool uninstall claude-swap`) or pass `--force`.
 
 ## Upgrading
 
