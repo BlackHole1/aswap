@@ -39,7 +39,7 @@ interface Run {
 }
 
 function run(args: string[], cwd: string): Run {
-  const p = Bun.spawnSync(args, { cwd, stdout: "pipe", stderr: "pipe" });
+  const p = Bun.spawnSync(args, { cwd, stdout: "pipe", stderr: "pipe", env: { ...process.env } });
   return {
     code: p.exitCode,
     stdout: new TextDecoder().decode(p.stdout),
@@ -61,10 +61,17 @@ function gitTry(args: string[], cwd = SUB): Run {
 
 /** `git am` needs a committer; CI runners have none configured. The patch's
  *  author is preserved either way, so a placeholder committer is harmless. */
+let committerArgs: string[] = [];
 function ensureCommitterIdentity(): void {
   const has = (key: string) => gitTry(["config", key], ROOT).stdout.trim().length > 0;
-  if (!process.env.GIT_COMMITTER_NAME && !has("user.name")) process.env.GIT_COMMITTER_NAME = "aswap patches";
-  if (!process.env.GIT_COMMITTER_EMAIL && !has("user.email")) process.env.GIT_COMMITTER_EMAIL = "patches@aswap.invalid";
+  const name = process.env.GIT_COMMITTER_NAME || (has("user.name") ? "" : "aswap patches");
+  const email = process.env.GIT_COMMITTER_EMAIL || (has("user.email") ? "" : "patches@aswap.invalid");
+  if (name) committerArgs.push("-c", `user.name=${name}`);
+  if (email) committerArgs.push("-c", `user.email=${email}`);
+}
+
+function gitAm(file: string, cwd = SUB): Run {
+  return gitTry([...committerArgs, "am", "--3way", "--keep-non-patch", file], cwd);
 }
 
 function fail(msg: string): never {
@@ -206,7 +213,7 @@ function applySeries(names: string[], startAt = 0): void {
     const name = names[i];
     const file = path.join(PATCHES, name);
     if (!existsSync(file)) fail(`${name} is listed in .patches but missing from patches/`);
-    const r = gitTry(["am", "--3way", "--keep-non-patch", file]);
+    const r = gitAm(file);
     if (r.code !== 0) {
       console.error((r.stdout + r.stderr).trim());
       console.error(resolutionHint(name));
@@ -345,7 +352,7 @@ function cmdVerify(): void {
     for (const name of names) {
       const file = path.join(PATCHES, name);
       if (!existsSync(file)) fail(`${name} is listed in .patches but missing from patches/`);
-      const r = gitTry(["am", "--3way", "--keep-non-patch", file], wt);
+      const r = gitAm(file, wt);
       if (r.code !== 0) {
         console.error((r.stdout + r.stderr).trim());
         console.error(`FAIL  ${name}`);
