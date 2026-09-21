@@ -1,4 +1,0 @@
-[submodule "cswap"]
-	path = cswap
-	url = https://github.com/realiti4/claude-swap
-	ignore = all

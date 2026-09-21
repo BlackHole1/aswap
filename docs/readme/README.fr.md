@@ -48,7 +48,7 @@ Chaque patch est un commit dont le message explique le problème upstream. La li
 
 ## Comment c'est construit
 
-L'upstream n'est pas forké. Il est intégré tel quel comme git submodule dans `cswap/`, et chaque modification vit dans `patches/` sous forme de patch `git am` ordinaire, appliqué dans l'ordre listé par `patches/.patches`. C'est [l'organisation qu'Electron utilise pour ses patches Node et Chromium](https://github.com/electron/electron/tree/main/patches) : le delta reste petit et lisible, et passer à un upstream plus récent est un rebase de la série plutôt qu'un merge. Les détails, les commandes et le workflow des patches sont dans [CONTRIBUTING.md](../../CONTRIBUTING.md).
+L'upstream n'est pas forké. Il est épinglé sur un commit dans `upstream.json` et cloné tel quel dans `cswap/`, et chaque modification vit dans `patches/` sous forme de patch `git am` ordinaire, appliqué dans l'ordre listé par `patches/.patches`. C'est [l'organisation qu'Electron utilise pour ses patches Node et Chromium](https://github.com/electron/electron/tree/main/patches) : le delta reste petit et lisible, et passer à un upstream plus récent est un rebase de la série plutôt qu'un merge. Les détails, les commandes et le workflow des patches sont dans [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
 ## Licence
 

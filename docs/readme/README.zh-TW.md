@@ -48,7 +48,7 @@ aswap upgrade  # 依安裝方式執行 uv tool upgrade aswap 或 pipx upgrade as
 
 ## 建置方式
 
-上游不做 fork。它以 git submodule 的形式原樣引入到 `cswap/`，所有變更都以一般的 `git am` 補丁存放在 `patches/` 下，依 `patches/.patches` 列出的順序依序套用。這正是 [Electron 管理 Node 與 Chromium 補丁的方式](https://github.com/electron/electron/tree/main/patches)：差異保持小而易讀，升級上游只是對補丁序列做一次 rebase，而不是 merge。細節、指令和補丁工作流程見 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
+上游不做 fork。它由 `upstream.json` 固定到一個上游 commit，原樣複製到 `cswap/`，所有變更都以一般的 `git am` 補丁存放在 `patches/` 下，依 `patches/.patches` 列出的順序依序套用。這正是 [Electron 管理 Node 與 Chromium 補丁的方式](https://github.com/electron/electron/tree/main/patches)：差異保持小而易讀，升級上游只是對補丁序列做一次 rebase，而不是 merge。細節、指令和補丁工作流程見 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
 
 ## 授權
 

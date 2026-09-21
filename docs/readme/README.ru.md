@@ -48,7 +48,7 @@ aswap upgrade  # uv tool upgrade aswap или pipx upgrade aswap, в завис�
 
 ## Как это собрано
 
-Upstream не форкается. Он подключается без изменений как git submodule в `cswap/`, а каждое изменение хранится в `patches/` как обычный патч для `git am` и применяется в порядке, указанном в `patches/.patches`. Так же [Electron управляет своими патчами для Node и Chromium](https://github.com/electron/electron/tree/main/patches): дельта остается небольшой и читаемой, а переход на новый upstream - это rebase серии, а не merge. Подробности, команды и рабочий процесс с патчами описаны в [CONTRIBUTING.md](../../CONTRIBUTING.md).
+Upstream не форкается. Он закреплен на одном коммите в `upstream.json` и клонируется без изменений в `cswap/`, а каждое изменение хранится в `patches/` как обычный патч для `git am` и применяется в порядке, указанном в `patches/.patches`. Так же [Electron управляет своими патчами для Node и Chromium](https://github.com/electron/electron/tree/main/patches): дельта остается небольшой и читаемой, а переход на новый upstream - это rebase серии, а не merge. Подробности, команды и рабочий процесс с патчами описаны в [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
 ## Лицензия
 

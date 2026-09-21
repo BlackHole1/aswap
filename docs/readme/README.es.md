@@ -48,7 +48,7 @@ Cada parche es un commit cuyo mensaje explica el problema upstream. La lista com
 
 ## Cómo está construido
 
-El upstream no se bifurca. Se incorpora sin cambios como git submodule en `cswap/`, y cada modificación vive en `patches/` como un parche `git am` corriente, aplicado en el orden que indica `patches/.patches`. Es la misma organización [que Electron usa para sus parches de Node y Chromium](https://github.com/electron/electron/tree/main/patches): la diferencia se mantiene pequeña y legible, y pasar a un upstream más nuevo es un rebase de la serie en lugar de un merge. Los detalles, los comandos y el flujo de trabajo con parches están en [CONTRIBUTING.md](../../CONTRIBUTING.md).
+El upstream no se bifurca. Se fija a un commit en `upstream.json` y se clona sin cambios en `cswap/`, y cada modificación vive en `patches/` como un parche `git am` corriente, aplicado en el orden que indica `patches/.patches`. Es la misma organización [que Electron usa para sus parches de Node y Chromium](https://github.com/electron/electron/tree/main/patches): la diferencia se mantiene pequeña y legible, y pasar a un upstream más nuevo es un rebase de la serie en lugar de un merge. Los detalles, los comandos y el flujo de trabajo con parches están en [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
 ## Licencia
 

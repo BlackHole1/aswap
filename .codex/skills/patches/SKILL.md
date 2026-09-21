@@ -1,23 +1,22 @@
 ---
 name: patches
-description: Manage the aswap patch series applied on top of the cswap (claude-swap) git submodule. Use whenever you change anything under cswap/ or patches/, need to add, modify, reorder, disable or remove a patch, resolve a patch conflict, or move the submodule to a newer upstream commit.
+description: Manage the aswap patch series applied on top of the cswap (claude-swap) checkout pinned in upstream.json. Use whenever you change anything under cswap/ or patches/, need to add, modify, reorder, disable or remove a patch, resolve a patch conflict, or move upstream.json to a newer upstream commit.
 ---
 
 # aswap patches
 
-`cswap/` is upstream [claude-swap](https://github.com/realiti4/claude-swap) as a
-git submodule. Every local change is a commit on top of the recorded submodule
-base, stored as a `git am` patch in `patches/`. `patches/.patches` lists the
+`cswap/` is upstream [claude-swap](https://github.com/realiti4/claude-swap),
+cloned by `apply` at the commit pinned in `upstream.json`; the directory itself
+is git-ignored. Every local change is a commit on top of that base, stored as a
+`git am` patch in `patches/`. `patches/.patches` lists the
 patch files in apply order, one per line, like Electron's `patches/*/.patches`.
 The tooling is `scripts/patches.ts` (bun), reachable as `bun run patches <cmd>`.
 
 ## Invariants
 
-- Never edit `cswap/` on the base commit and never commit the submodule pointer
-  at a patched commit. The base is what the superproject stages for `cswap`
-  (`.gitmodules` sets `ignore = all`, so patched HEADs do not show up in
-  `git status`; only `bun run patches update` moves the pointer, with
-  `git add --force cswap`).
+- Never edit `cswap/` on the base commit. The base is the `commit` in
+  `upstream.json`; only `bun run patches update` rewrites it, and it must always
+  be an upstream commit, never one of the patch commits.
 - Never hand-edit `*.patch` files. Change the commit in `cswap/`, then export.
 - `export` rewrites a patch file only when its diff or commit message changed.
   Differences confined to `index <blob>..<blob>` lines are ignored, so adding,
@@ -144,11 +143,10 @@ bun run patches update v0.28.0      # a tag or any commit reachable from origin
 ```
 
 `update` refuses to run while `cswap/` has uncommitted changes or while
-`patches/` is behind the commits in `cswap/`. On success it stages the new
-submodule pointer (`git diff --cached` shows it) and re-exports; commit the
-pointer and any rewritten patches together. On a conflict it stops exactly like
-`apply` does; resolve, `--continue`, `export`, and the staged pointer is still
-there.
+`patches/` is behind the commits in `cswap/`. On success it writes the new
+commit to `upstream.json` and re-exports; commit that file and any rewritten
+patches together. On a conflict it stops exactly like `apply` does; resolve,
+`--continue`, `export`, and `upstream.json` already carries the new base.
 
 ### Before you finish
 

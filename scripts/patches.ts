@@ -3,14 +3,15 @@
  * aswap patch manager.
  *
  * Keeps the `patches/` series (one `git am`-able file per commit, ordered by
- * `patches/.patches`) applied on top of the `cswap` submodule, the way
+ * `patches/.patches`) applied on top of the upstream checkout in `cswap/`
+ * (cloned at the commit pinned in `upstream.json`, git-ignored), the way
  * electron manages its patches over node/chromium.
  *
- *   bun run patches apply    reset the submodule to its recorded base and apply the series
+ *   bun run patches apply    clone cswap/ if needed, reset it to the pinned base and apply the series
  *   bun run patches export   regenerate patch files from the commits on top of the base
  *   bun run patches status   show base, applied commits, and whether an export is pending
  *   bun run patches verify   apply the series in a throwaway worktree (CI)
- *   bun run patches update   move the base to a newer upstream commit and re-apply
+ *   bun run patches update   move the pin in upstream.json to a newer upstream commit and re-apply
  *
  * Invariants the export step honors:
  *   - a patch file is rewritten only when its diff or message changed;
@@ -25,6 +26,7 @@ import path from "node:path";
 const ROOT = path.resolve(import.meta.dir, "..");
 const SUBMODULE = "cswap";
 const SUB = path.join(ROOT, SUBMODULE);
+const UPSTREAM_FILE = path.join(ROOT, "upstream.json");
 const PATCHES = path.join(ROOT, "patches");
 const INDEX = path.join(PATCHES, ".patches");
 const BRANCH = "aswap/patched";
@@ -87,21 +89,39 @@ function short(sha: string): string {
   return sha.slice(0, 10);
 }
 
-/** The upstream commit the series is based on: the submodule pointer as
- *  staged in the superproject (falls back to HEAD's). */
+interface Upstream {
+  url: string;
+  commit: string;
+}
+
+/** `upstream.json` pins the upstream commit the series is based on. The
+ *  checkout itself (cswap/) is git-ignored, so nothing in it can be staged by
+ *  mistake; only `update` rewrites the pin. */
+function readUpstream(): Upstream {
+  let u: Upstream;
+  try {
+    u = JSON.parse(readFileSync(UPSTREAM_FILE, "utf8")) as Upstream;
+  } catch (e) {
+    return fail(`cannot read upstream.json: ${(e as Error).message}`);
+  }
+  if (!/^[0-9a-f]{40}$/.test(u.commit ?? "")) fail(`upstream.json: "commit" must be a full 40-hex sha`);
+  if (!/^https?:\/\//.test(u.url ?? "")) fail(`upstream.json: "url" must be an http(s) clone URL`);
+  return u;
+}
+
 function baseSha(): string {
-  const staged = gitTry(["ls-files", "--stage", "--", SUBMODULE], ROOT);
-  const m = staged.stdout.match(/^160000 ([0-9a-f]{40}) /m);
-  if (m) return m[1];
-  const head = gitTry(["rev-parse", `HEAD:${SUBMODULE}`], ROOT);
-  if (head.code === 0) return head.stdout.trim();
-  fail(`cannot determine the ${SUBMODULE} submodule base (is the submodule registered?)`);
+  return readUpstream().commit;
+}
+
+function writeUpstream(u: Upstream): void {
+  writeFileSync(UPSTREAM_FILE, `${JSON.stringify(u, null, 2)}\n`);
 }
 
 function ensureSubmodule(): void {
+  const { url } = readUpstream();
   if (!existsSync(path.join(SUB, ".git"))) {
-    info(`initializing submodule ${SUBMODULE}...`);
-    git(["submodule", "update", "--init", "--", SUBMODULE], ROOT);
+    info(`cloning ${url} into ${SUBMODULE}/...`);
+    git(["clone", "-q", url, SUBMODULE], ROOT);
   }
 }
 
@@ -321,7 +341,7 @@ function cmdStatus(): void {
   const base = baseSha();
   const head = git(["rev-parse", "HEAD"]);
   const branch = gitTry(["symbolic-ref", "--short", "-q", "HEAD"]).stdout.trim() || "(detached)";
-  info(`submodule  ${SUBMODULE}/`);
+  info(`upstream   ${readUpstream().url} (pinned in upstream.json)`);
   info(`base       ${base}`);
   info(`HEAD       ${head}  ${branch}`);
   info(`dirty      ${isDirty() ? "yes" : "no"}`);
@@ -389,28 +409,26 @@ function cmdUpdate(args: string[]): void {
     info(`base ${short(current)} -> ${short(target)} (${ref})`);
   }
   git(["checkout", "-q", "--force", "--detach", target]);
-  git(["add", "--force", "--", SUBMODULE], ROOT);
+  writeUpstream({ ...readUpstream(), commit: target });
   const names = readIndex();
   info(`applying ${names.length} patches on the new base`);
   applySeries(names);
   git(["checkout", "-q", "-B", BRANCH]);
   cmdExport([]);
-  info(
-    `\nupdated; review "git diff --cached" in the superproject and commit the new base together with any rewritten patches`,
-  );
+  info(`\nupdated; review "git diff" and commit upstream.json together with any rewritten patches`);
 }
 
 function cmdHelp(): void {
   console.log(`usage: bun run patches <command>
 
-  apply [--force] [--continue]   reset ${SUBMODULE}/ to the base commit and apply patches/.patches in order
+  apply [--force] [--continue]   clone ${SUBMODULE}/ if missing, reset it to the pinned base, apply patches/.patches in order
                                  --force discards uncommitted changes in ${SUBMODULE}/
                                  --continue resumes after a resolved conflict
   export [--check]               write patches/ from the commits on top of the base
                                  (only files whose diff or message changed; --check just reports)
   status                         base, HEAD, index, pending export
   verify                         apply the series in a throwaway worktree (exit 1 on failure)
-  update [ref] [--force]         fetch upstream, move the base to <ref> (default ${UPSTREAM_REF}),
+  update [ref] [--force]         fetch upstream, pin <ref> (default ${UPSTREAM_REF}) in upstream.json,
                                  re-apply and export
   help                           this text`);
 }

@@ -7,7 +7,7 @@
   "type": "module",
   "scripts": {
     "patches": "bun scripts/patches.ts",
-    "setup": "git submodule update --init && bun scripts/patches.ts apply",
+    "setup": "bun scripts/patches.ts apply",
     "apply": "bun scripts/patches.ts apply",
     "export": "bun scripts/patches.ts export",
     "status": "bun scripts/patches.ts status",

@@ -1,11 +1,12 @@
 # Contributing
 
-aswap is upstream [claude-swap](https://github.com/realiti4/claude-swap) as a git submodule plus a patch series. Contributions are patches: one commit on top of the upstream base, exported as a file under `patches/`.
+aswap is upstream [claude-swap](https://github.com/realiti4/claude-swap), pinned to one commit in `upstream.json`, plus a patch series. Contributions are patches: one commit on top of the upstream base, exported as a file under `patches/`.
 
 ## Layout
 
 ```
-cswap/                   upstream claude-swap (git submodule, never edited on its base commit)
+upstream.json            the upstream clone URL and the commit the series is based on
+cswap/                   upstream claude-swap, cloned by setup at that commit (git-ignored, never edited on the base commit)
 patches/.patches         ordered list of the patch files to apply
 patches/*.patch          one commit each, named after the commit title
 scripts/patches.ts       the patch manager (bun)
@@ -20,14 +21,14 @@ docs/readme/             the README in other languages
 Requirements: git, [bun](https://bun.sh) (version pinned in `.bun-version`), [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone --recurse-submodules https://github.com/BlackHole1/aswap
+git clone https://github.com/BlackHole1/aswap
 cd aswap
 bun install              # oxlint, oxfmt, typescript for the scripts
-bun run setup            # init the submodule and apply the series
+bun run setup            # clone cswap/ at the pinned commit and apply the series
 bun run test             # upstream's test suite on the patched tree
 ```
 
-After `setup`, `cswap/` sits on branch `aswap/patched` with every listed patch applied.
+After `setup`, `cswap/` sits on branch `aswap/patched` with every listed patch applied. The directory is git-ignored: the repository only records the pin in `upstream.json`, so nothing you do inside `cswap/` can end up staged by accident.
 
 ## Commands
 
@@ -55,7 +56,7 @@ The complete workflow, including conflict resolution and upstream updates, is in
 - **Disable.** Delete its line from `patches/.patches` and run `apply`. The file stays and is reported as `not listed`.
 - **Remove.** Disable it, then delete the file.
 - **Insert or reorder.** Reorder the commits in `cswap/`, then export.
-- **Update upstream.** `bun run patches update`; resolve conflicts as `apply` describes, then commit the new submodule pointer together with any rewritten patches.
+- **Update upstream.** `bun run patches update`; resolve conflicts as `apply` describes, then commit the rewritten `upstream.json` together with any rewritten patches.
 
 `export` rewrites a patch file only when its diff or message changed. Differences limited to `index <blob>..<blob>` lines are ignored, so adding, removing, disabling or reordering patches never touches the other files. The one exception is a conflict: a patch that had to be adjusted to apply is, by definition, a changed patch.
 

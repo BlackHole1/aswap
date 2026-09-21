@@ -48,7 +48,7 @@ aswap upgrade  # 설치 방식에 따라 uv tool upgrade aswap 또는 pipx upgra
 
 ## 만드는 방식
 
-업스트림을 fork하지 않습니다. `cswap/`에 git submodule로 그대로 가져오고, 모든 변경은 일반적인 `git am` 패치로 `patches/`에 두며 `patches/.patches`에 나열된 순서대로 적용합니다. 이것은 [Electron이 Node와 Chromium 패치를 관리하는 방식](https://github.com/electron/electron/tree/main/patches)과 같습니다. 차이는 작고 읽기 쉽게 유지되며, 업스트림 업데이트는 merge가 아니라 패치 시리즈의 rebase가 됩니다. 세부 사항, 명령, 패치 워크플로는 [CONTRIBUTING.md](../../CONTRIBUTING.md)에 있습니다.
+업스트림을 fork하지 않습니다. `upstream.json`에 업스트림 커밋 하나를 고정하고 `cswap/`에 그대로 clone하며, 모든 변경은 일반적인 `git am` 패치로 `patches/`에 두며 `patches/.patches`에 나열된 순서대로 적용합니다. 이것은 [Electron이 Node와 Chromium 패치를 관리하는 방식](https://github.com/electron/electron/tree/main/patches)과 같습니다. 차이는 작고 읽기 쉽게 유지되며, 업스트림 업데이트는 merge가 아니라 패치 시리즈의 rebase가 됩니다. 세부 사항, 명령, 패치 워크플로는 [CONTRIBUTING.md](../../CONTRIBUTING.md)에 있습니다.
 
 ## 라이선스
 

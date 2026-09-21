@@ -48,7 +48,7 @@ Every patch is one commit with a message explaining the upstream problem. The fu
 
 ## How it is built
 
-Upstream is not forked. It is pulled in unchanged as a git submodule at `cswap/`, and every change lives in `patches/` as an ordinary `git am` patch, applied in the order listed in `patches/.patches`. This is [the layout Electron uses for its Node and Chromium patches](https://github.com/electron/electron/tree/main/patches): the delta stays small and readable, and moving to a newer upstream is a rebase of the series rather than a merge. Details, commands, and the patch workflow are in [CONTRIBUTING.md](CONTRIBUTING.md).
+Upstream is not forked. It is pinned to one upstream commit in `upstream.json` and cloned unchanged into `cswap/`, and every change lives in `patches/` as an ordinary `git am` patch, applied in the order listed in `patches/.patches`. This is [the layout Electron uses for its Node and Chromium patches](https://github.com/electron/electron/tree/main/patches): the delta stays small and readable, and moving to a newer upstream is a rebase of the series rather than a merge. Details, commands, and the patch workflow are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

@@ -48,7 +48,7 @@ aswap upgrade  # インストール方法に応じて uv tool upgrade aswap ま�
 
 ## 作り方
 
-上流は fork しません。`cswap/` に git submodule としてそのまま取り込み、すべての変更は通常の `git am` パッチとして `patches/` に置き、`patches/.patches` に列挙された順に適用します。これは [Electron が Node と Chromium のパッチを管理している方式](https://github.com/electron/electron/tree/main/patches) と同じです。差分は小さく読みやすいまま、上流の更新は merge ではなくパッチ列の rebase になります。詳細、コマンド、パッチのワークフローは [CONTRIBUTING.md](../../CONTRIBUTING.md) にあります。
+上流は fork しません。`upstream.json` で上流の 1 コミットに固定し、`cswap/` にそのまま clone して、すべての変更は通常の `git am` パッチとして `patches/` に置き、`patches/.patches` に列挙された順に適用します。これは [Electron が Node と Chromium のパッチを管理している方式](https://github.com/electron/electron/tree/main/patches) と同じです。差分は小さく読みやすいまま、上流の更新は merge ではなくパッチ列の rebase になります。詳細、コマンド、パッチのワークフローは [CONTRIBUTING.md](../../CONTRIBUTING.md) にあります。
 
 ## ライセンス
 
