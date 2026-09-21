@@ -167,10 +167,10 @@ index 6557093b52dff125ca65ed421b0d759b03fad6d1..4bd5417a458917c60cb74cd662ac8a3c
  
 diff --git a/src/claude_swap/desktop.py b/src/claude_swap/desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..a9003891dd206bde6f78609523c467731b922137
+index 0000000000000000000000000000000000000000..785ecf18005f5cf220408f8a0d2424fde63b7e30
 --- /dev/null
 +++ b/src/claude_swap/desktop.py
-@@ -0,0 +1,604 @@
+@@ -0,0 +1,618 @@
 +"""Claude Desktop, one window per stored account.
 +
 +Claude Desktop holds one login per profile: to use a second account the
@@ -627,17 +627,31 @@ index 0000000000000000000000000000000000000000..a9003891dd206bde6f78609523c46773
 +        return 1 if failed else 0
 +
 +    def quit(self, identifiers: list[str], all_accounts: bool = False) -> int:
-+        """Close the given accounts' windows. Returns 1 for an unknown account."""
++        """Close the given accounts' windows. Returns 1 for an unknown account.
++
++        ``--all`` also sweeps ``desktop/`` itself, so a profile whose account
++        slot is gone (the one ``purge`` reports) is closed too.
++        """
 +        targets = self._targets(identifiers, all_accounts)
 +        failed = any(t is None for t in targets)
++        seen: set[str] = set()
 +        for target in targets:
 +            if target is None:
 +                continue
 +            number, email = target
-+            if quit_instance(self.data_dir(number, email), platform=self.platform):
++            data_dir = self.data_dir(number, email)
++            seen.add(data_dir.name)
++            if quit_instance(data_dir, platform=self.platform):
 +                print(f"  {number}. {email} {accent('closed')}")
 +            else:
 +                print(f"  {number}. {email} {dimmed('not open')}")
++        if all_accounts:
++            root = self.switcher.backup_dir / DESKTOP_DIRNAME
++            for name in sorted(self.open_profile_dirs()):
++                if name in seen:
++                    continue
++                if quit_instance(root / name, platform=self.platform):
++                    print(f"  {name} {accent('closed')} {dimmed('(no account slot)')}")
 +        return 1 if failed else 0
 +
 +    def show(self) -> None:
@@ -971,10 +985,10 @@ index 60d81f8758b742402a3cf4629235b784c372f585..f4f09d414f548b638ad7902323e01fd8
          assert by_key["autoswitch.threshold"]["isSet"] is False
 diff --git a/tests/test_desktop.py b/tests/test_desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..49cc3d1a23f9d4922a51bbc61043fca904fba953
+index 0000000000000000000000000000000000000000..c9fc8b6406fee8660cc3bfcc6ca18f5cf40483e6
 --- /dev/null
 +++ b/tests/test_desktop.py
-@@ -0,0 +1,602 @@
+@@ -0,0 +1,619 @@
 +"""``cswap desktop``: Claude Desktop, one window per stored account.
 +
 +Claude Desktop keeps one login per profile, and Electron honors
@@ -1252,6 +1266,23 @@ index 0000000000000000000000000000000000000000..49cc3d1a23f9d4922a51bbc61043fca9
 +        out = _plain(capsys.readouterr().out)
 +        assert "1. account1@example.com closed" in out
 +        assert "2. account2@example.com not open" in out
++
++    def test_quit_all_also_closes_a_profile_without_a_slot(self, manager, capsys):
++        """``purge`` refuses on any open profile dir and says to run
++        ``--quit --all``, so that must reach a profile whose account is gone."""
++        orphan = manager.switcher.backup_dir / "desktop" / "9-gone_example.com"
++        orphan.mkdir(parents=True)
++        with patch.object(
++            desktop, "running_pids",
++            side_effect=lambda d, p=None: [77] if d.name.startswith("9-") else [],
++        ), patch.object(desktop, "quit_instance", return_value=True) as quit:
++            assert manager.quit([], all_accounts=True) == 0
++        assert [c.args[0].name for c in quit.call_args_list] == [
++            "1-account1_example.com", "2-account2_example.com", "9-gone_example.com",
++        ]
++        assert "9-gone_example.com closed (no account slot)" in _plain(
++            capsys.readouterr().out
++        )
 +
 +    def test_show_lists_open_closed_and_never_opened(self, manager, capsys):
 +        manager.data_dir("2", "account2@example.com").mkdir(parents=True)
