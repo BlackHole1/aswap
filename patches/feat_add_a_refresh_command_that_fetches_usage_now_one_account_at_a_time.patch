@@ -3,24 +3,22 @@ From: Kevin Cui <bh@bugs.cc>
 Date: Mon, 21 Sep 2026 03:13:31 -0400
 Subject: feat: add a refresh command that fetches usage now, one account at a
  time
-MIME-Version: 1.0
-Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: 8bit
 
-`cswap list` serves the cached measurement while an account is inside
-the serve TTL, its poll plan, or a failure backoff. After a usage
-endpoint 429 the backoff honors Retry-After plus a margin, which is an
-hour or more of "· 1h ago" on the listing with no command that asks
-again. Both accounts sharing one token's budget made this visible:
-identical numbers on both rows, both parked until the same minute.
+Usage is only ever fetched on upstream's own schedule. Every surface
+(list, status, the dashboards, the auto engine) serves the cached
+measurement until the serve TTL, the poll plan and any failure backoff
+all allow another request, and a 429 backoff honors Retry-After plus a
+margin, so an account can sit on a stale number for an hour or more.
+There is no command to fetch on demand, and the server's own retry
+deadline is never shown; the user can only wait.
 
 `cswap refresh [num|email ...]` fetches the given accounts (default:
 all) right now. UsageStore.reserve grows a `force` mode that skips the
 freshness, poll-plan and backoff gates while keeping the two that make
 a request pointless or unsafe: a dead refresh token, and another
 collector's live lease. Every account is claimed, fetched and recorded
-on its own, so a 429 on one never blocks the others; a rate-limited
-account prints the server's own Retry-After deadline (the local backoff
+on its own, so a failure on one never blocks the others; a rate-limited
+account prints the server's Retry-After deadline (the local backoff
 when the server sent none) and keeps its last measurement on screen.
 Exit code 1 when any requested account could not be refreshed.
 

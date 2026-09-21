@@ -39,11 +39,11 @@ aswap upgrade  # 依安裝方式執行 uv tool upgrade aswap 或 pipx upgrade as
 
 ## 補丁修正了什麼
 
-| 補丁                                                                                                                     | 問題                                                                                                                                                              |
-| ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [跟隨活動憑證的真正擁有者](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | `~/.claude.json` 過期後可能寫著帳號 B，而鑰匙圈裡是帳號 A 的 token。上游據此誤報 A 需要重新登入，B 也不再重新整理。補丁依憑證的真正擁有者判斷，並跨執行記住結果。 |
-| [跟隨實際安裝的發行版](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)        | 版本號、更新檢查和 `upgrade` 寫死了 `claude-swap`，裝成 `aswap` 後全部失效。補丁改為跟隨真正提供程式碼的發行版。                                                  |
-| [依需求重新整理用量](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)        | 用量介面回傳 429 後，`ls` 會顯示一小時前的舊資料且無法重新取得。`cswap refresh [帳號 ...]` 立即重新整理，各帳號互不影響，被限流時告知伺服器允許重試的時間。       |
+| 補丁                                                                                                                     | 問題                                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [跟隨活動憑證的真正擁有者](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | `~/.claude.json` 過期後可能寫著帳號 B，而鑰匙圈裡是帳號 A 的 token。上游據此誤報 A 需要重新登入，B 也不再重新整理。補丁依憑證的真正擁有者判斷，並跨執行記住結果。                                                     |
+| [跟隨實際安裝的發行版](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)        | 版本號、更新檢查和 `upgrade` 寫死了 `claude-swap`，裝成 `aswap` 後全部失效。補丁改為跟隨真正提供程式碼的發行版。                                                                                                      |
+| [依需求重新整理用量](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)        | 上游只依自己的節奏抓取用量：在 serve TTL、輪詢計畫和失敗退避全部放行之前，所有介面都只顯示快取值，也從不顯示伺服器允許重試的時間。`cswap refresh [帳號 ...]` 立即抓取，各帳號互相獨立，並告知被限流帳號何時可以重試。 |
 
 每個補丁都是一次提交，提交訊息說明上游的問題。完整清單見 [patches/.patches](../../patches/.patches)。
 
