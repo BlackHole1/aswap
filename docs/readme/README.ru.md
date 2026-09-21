@@ -52,7 +52,7 @@ aswap upgrade  # uv tool upgrade aswap или pipx upgrade aswap, в завис�
 
 Каждый патч - один коммит. Сообщение коммита объясняет проблему upstream. Полный список в [patches/.patches](../../patches/.patches).
 
-`cswap refresh` запрашивает использование прямо сейчас, по одному аккаунту за раз, и показывает, когда аккаунт с превышенным лимитом сможет повторить запрос:
+`cswap refresh` запрашивает использование прямо сейчас, по одному аккаунту за раз, и показывает, когда аккаунт, ограниченный по частоте запросов, сможет повторить попытку:
 
 <img src="../images/cswap-refresh.png" alt="cswap refresh: one account refreshed, the other rate limited with the server retry time" width="820">
 
