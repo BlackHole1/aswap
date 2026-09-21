@@ -167,10 +167,10 @@ index 6557093b52dff125ca65ed421b0d759b03fad6d1..4bd5417a458917c60cb74cd662ac8a3c
  
 diff --git a/src/claude_swap/desktop.py b/src/claude_swap/desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..785ecf18005f5cf220408f8a0d2424fde63b7e30
+index 0000000000000000000000000000000000000000..5c992a51c630620900e1a36cb2f987fee2b22a17
 --- /dev/null
 +++ b/src/claude_swap/desktop.py
-@@ -0,0 +1,618 @@
+@@ -0,0 +1,620 @@
 +"""Claude Desktop, one window per stored account.
 +
 +Claude Desktop holds one login per profile: to use a second account the
@@ -405,6 +405,8 @@ index 0000000000000000000000000000000000000000..785ecf18005f5cf220408f8a0d2424fd
 +    Matches the whole ``--user-data-dir=<dir>`` token, terminated by
 +    whitespace or the end of the command line, so ``2-a`` never matches
 +    ``2-ab``; helpers inherit the flag, so one window is several PIDs.
++    The pattern is POSIX ERE for ``pgrep``: ``[[:space:]]``, not ``\\s``,
++    which BSD ``pgrep`` (macOS) does not understand and never matches.
 +    Empty on every failure: not knowing reads as "not running", which only
 +    ever costs a second window, never a lost one.
 +    """
@@ -415,7 +417,7 @@ index 0000000000000000000000000000000000000000..785ecf18005f5cf220408f8a0d2424fd
 +        if platform == Platform.WINDOWS:
 +            out = _windows_matching_pids(needle)
 +        else:
-+            pattern = re.escape(needle) + r"(\s|$)"
++            pattern = re.escape(needle) + r"([[:space:]]|$)"
 +            proc = subprocess.run(
 +                ["pgrep", "-f", pattern],
 +                capture_output=True, text=True, timeout=10,
@@ -985,10 +987,10 @@ index 60d81f8758b742402a3cf4629235b784c372f585..f4f09d414f548b638ad7902323e01fd8
          assert by_key["autoswitch.threshold"]["isSet"] is False
 diff --git a/tests/test_desktop.py b/tests/test_desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..c9fc8b6406fee8660cc3bfcc6ca18f5cf40483e6
+index 0000000000000000000000000000000000000000..93816c5ba1e5083c22d20ae1fc88312aa4da7a34
 --- /dev/null
 +++ b/tests/test_desktop.py
-@@ -0,0 +1,619 @@
+@@ -0,0 +1,642 @@
 +"""``cswap desktop``: Claude Desktop, one window per stored account.
 +
 +Claude Desktop keeps one login per profile, and Electron honors
@@ -1137,17 +1139,40 @@ index 0000000000000000000000000000000000000000..c9fc8b6406fee8660cc3bfcc6ca18f5c
 +
 +
 +class TestRunningPids:
-+    def test_matches_the_whole_token_and_drops_itself(self, tmp_path):
-+        data_dir = tmp_path / "2-a"
++    def test_drops_itself_and_noise(self, tmp_path):
 +        with patch.object(desktop.subprocess, "run") as run, \
 +             patch.object(desktop.os, "getpid", return_value=77):
 +            run.return_value = MagicMock(stdout="77\n101\n102\nnoise\n")
-+            pids = desktop.running_pids(data_dir, Platform.MACOS)
++            pids = desktop.running_pids(tmp_path / "2-a", Platform.MACOS)
 +        assert pids == [101, 102]
-+        pattern = run.call_args.args[0][2]
-+        assert re.search(pattern, f"/x/Claude --user-data-dir={data_dir}")
-+        assert re.search(pattern, f"Claude --user-data-dir={data_dir} --type=renderer")
-+        assert not re.search(pattern, f"Claude --user-data-dir={data_dir}b")
++
++    @pytest.mark.skipif(sys.platform == "win32", reason="pgrep is POSIX")
++    def test_matches_the_whole_token_through_the_real_pgrep(self, tmp_path):
++        """Run the pattern through the system ``pgrep``, not Python's ``re``:
++        the two dialects differ, and BSD ``pgrep`` (macOS) has no ``\\s``,
++        so a pattern that only ever met ``re`` matched nothing there."""
++        data_dir = tmp_path / "2-a"
++        sleeper = "import time; time.sleep(30)"
++        procs = [
++            subprocess.Popen(
++                [sys.executable, "-c", sleeper, f"--user-data-dir={dir_}", *rest],
++                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
++                stderr=subprocess.DEVNULL,
++            )
++            for dir_, rest in (
++                (data_dir, []),
++                (data_dir, ["--type=renderer"]),
++                (str(data_dir) + "b", []),
++            )
++        ]
++        try:
++            platform = Platform.MACOS if sys.platform == "darwin" else Platform.LINUX
++            found = desktop.running_pids(data_dir, platform)
++        finally:
++            for proc in procs:
++                proc.kill()
++                proc.wait()
++        assert sorted(found) == sorted(p.pid for p in procs[:2])
 +
 +    def test_unknowable_reads_as_not_running(self, tmp_path):
 +        with patch.object(desktop.subprocess, "run", side_effect=OSError("no pgrep")):
