@@ -272,6 +272,17 @@ function cmdApply(args: string[]): void {
     fail(`a git am is in progress in ${SUBMODULE}/; finish it (am --continue) or abort it (am --abort) first`);
   if (isDirty() && !force)
     fail(`${SUBMODULE}/ has uncommitted changes; commit or stash them, or pass --force to discard`);
+  // Re-applying moves the branch: a commit on top of the base that is not
+  // exported yet would survive only in the reflog. Refuse unless forced.
+  if (!force && !amInProgress()) {
+    const pending = planExport().writes;
+    if (pending.length > 0) {
+      fail(
+        `${SUBMODULE}/ has ${pending.length} commit(s) not exported to patches/ (${pending.map((e) => short(e.sha)).join(", ")}); ` +
+          `run "bun run patches export" first, or pass --force to drop them`,
+      );
+    }
+  }
   ensureBaseFetched(base);
 
   git(["checkout", "-q", "--force", "--detach", base]);
@@ -422,7 +433,7 @@ function cmdHelp(): void {
   console.log(`usage: bun run patches <command>
 
   apply [--force] [--continue]   clone ${SUBMODULE}/ if missing, reset it to the pinned base, apply patches/.patches in order
-                                 --force discards uncommitted changes in ${SUBMODULE}/
+                                 --force discards uncommitted changes and unexported commits in ${SUBMODULE}/
                                  --continue resumes after a resolved conflict
   export [--check]               write patches/ from the commits on top of the base
                                  (only files whose diff or message changed; --check just reports)

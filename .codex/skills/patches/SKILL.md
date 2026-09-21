@@ -40,7 +40,7 @@ The tooling is `scripts/patches.ts` (bun), reachable as `bun run patches <cmd>`.
 | command | effect |
 | --- | --- |
 | `bun run patches apply` | check out the base in `cswap/`, `git am --3way` every listed patch, leave HEAD on branch `aswap/patched` |
-| `bun run patches apply --force` | same, discarding uncommitted changes in `cswap/` |
+| `bun run patches apply --force` | same, discarding uncommitted changes and unexported commits in `cswap/` (without it, apply refuses both) |
 | `bun run patches apply --continue` | after resolving a conflict and `git am --continue`, apply the rest of the series |
 | `bun run patches export` | write `patches/*.patch` and `.patches` from the commits on top of the base |
 | `bun run patches export --check` | report what export would write, exit 1 if anything (CI) |

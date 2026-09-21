@@ -32,20 +32,20 @@ After `setup`, `cswap/` sits on branch `aswap/patched` with every listed patch a
 
 ## Commands
 
-| command                          | effect                                                                                                                                        |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bun run patches apply`          | check out the base commit in `cswap/` and apply the series (`--force` discards local changes, `--continue` resumes after a resolved conflict) |
-| `bun run patches export`         | regenerate `patches/` from the commits on top of the base (`--check` only reports)                                                            |
-| `bun run patches status`         | base, HEAD, index, disabled files, pending export                                                                                             |
-| `bun run patches verify`         | apply the series in a throwaway worktree; fails if any patch does not apply                                                                   |
-| `bun run patches update [ref]`   | fetch upstream, move the base to `ref` (default `origin/main`), re-apply, export                                                              |
-| `bun run test`                   | `uv run pytest` inside `cswap/`                                                                                                               |
-| `bun run build`                  | build the patched claude-swap wheel and the aswap wheel into `dist/` (refuses when `cswap/` does not match `patches/`)                        |
-| `bun run install:cswap`          | build, then `uv tool install` the patched claude-swap in place of the PyPI package (command `cswap`)                                          |
-| `bun run install:aswap`          | build, then `uv tool install` the `aswap` package next to upstream cswap (command `aswap`; source in `packaging/aswap`)                       |
-| `bun run install:all`            | both                                                                                                                                          |
-| `bun run lint`, `bun run format` | oxlint and oxfmt checks for the scripts (`bun run fix` applies both)                                                                          |
-| `bun run typecheck`              | `tsc --noEmit` for the scripts                                                                                                                |
+| command                          | effect                                                                                                                                                                                                     |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bun run patches apply`          | check out the base commit in `cswap/` and apply the series (refuses while `cswap/` has uncommitted changes or unexported commits; `--force` discards them, `--continue` resumes after a resolved conflict) |
+| `bun run patches export`         | regenerate `patches/` from the commits on top of the base (`--check` only reports)                                                                                                                         |
+| `bun run patches status`         | base, HEAD, index, disabled files, pending export                                                                                                                                                          |
+| `bun run patches verify`         | apply the series in a throwaway worktree; fails if any patch does not apply                                                                                                                                |
+| `bun run patches update [ref]`   | fetch upstream, move the base to `ref` (default `origin/main`), re-apply, export                                                                                                                           |
+| `bun run test`                   | `uv run pytest` inside `cswap/`                                                                                                                                                                            |
+| `bun run build`                  | build the patched claude-swap wheel and the aswap wheel into `dist/` (refuses when `cswap/` does not match `patches/`)                                                                                     |
+| `bun run install:cswap`          | build, then `uv tool install` the patched claude-swap in place of the PyPI package (command `cswap`)                                                                                                       |
+| `bun run install:aswap`          | build, then `uv tool install` the `aswap` package next to upstream cswap (command `aswap`; source in `packaging/aswap`)                                                                                    |
+| `bun run install:all`            | both                                                                                                                                                                                                       |
+| `bun run lint`, `bun run format` | oxlint and oxfmt checks for the scripts (`bun run fix` applies both)                                                                                                                                       |
+| `bun run typecheck`              | `tsc --noEmit` for the scripts                                                                                                                                                                             |
 
 ## Working with patches
 
