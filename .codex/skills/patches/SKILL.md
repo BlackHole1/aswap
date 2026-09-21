@@ -155,3 +155,6 @@ patches together. On a conflict it stops exactly like `apply` does; resolve,
 - `bun run test` passes.
 - `git status` in the superproject shows only `patches/` changes (plus
   `upstream.json` after an `update`).
+- To try the change on this machine, `bun run install:all`, never
+  `install:cswap` alone: the `aswap` wheel bundles its own copy of the cswap
+  code, so an installed `aswap` stays on the old build otherwise.
