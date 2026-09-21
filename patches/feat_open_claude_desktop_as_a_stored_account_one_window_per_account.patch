@@ -167,10 +167,10 @@ index 6557093b52dff125ca65ed421b0d759b03fad6d1..4bd5417a458917c60cb74cd662ac8a3c
  
 diff --git a/src/claude_swap/desktop.py b/src/claude_swap/desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..5c992a51c630620900e1a36cb2f987fee2b22a17
+index 0000000000000000000000000000000000000000..1d910bbb6391d3fea58ffbc7af1042319d49831f
 --- /dev/null
 +++ b/src/claude_swap/desktop.py
-@@ -0,0 +1,620 @@
+@@ -0,0 +1,649 @@
 +"""Claude Desktop, one window per stored account.
 +
 +Claude Desktop holds one login per profile: to use a second account the
@@ -456,13 +456,17 @@ index 0000000000000000000000000000000000000000..5c992a51c630620900e1a36cb2f987fe
 +) -> bool:
 +    """Ask the account's window to quit, then force it once ``timeout`` passes.
 +
++    The polite signal goes to the browser process only: Electron and Chrome
++    both shut down cleanly on TERM, taking their helpers with them, but a
++    helper killed underneath them counts as a crash and the next start
++    opens with a restore bar. Only the forced round hits every process.
 +    Returns True when something was running.
 +    """
 +    platform = platform or Platform.detect()
 +    pids = running_pids(data_dir, platform)
 +    if not pids:
 +        return False
-+    _signal(pids, force=False, platform=platform)
++    _signal(main_pids(pids, platform) or pids, force=False, platform=platform)
 +    deadline = time.monotonic() + timeout
 +    while running_pids(data_dir, platform):
 +        if time.monotonic() >= deadline:
@@ -470,6 +474,31 @@ index 0000000000000000000000000000000000000000..5c992a51c630620900e1a36cb2f987fe
 +            break
 +        time.sleep(0.2)
 +    return True
++
++
++def main_pids(pids: list[int], platform: Platform | None = None) -> list[int]:
++    """The browser processes among ``pids``: every helper carries a
++    ``--type=`` on its command line, the process that owns the window does
++    not. Empty when the command lines cannot be read."""
++    platform = platform or Platform.detect()
++    if not pids or platform == Platform.WINDOWS:
++        return []
++    try:
++        proc = subprocess.run(
++            ["ps", "-o", "pid=,command=", "-p", ",".join(map(str, pids))],
++            capture_output=True, text=True, timeout=10,
++        )
++    except (OSError, subprocess.TimeoutExpired):
++        return []
++    found = []
++    for line in proc.stdout.splitlines():
++        parts = line.strip().split(None, 1)
++        if len(parts) == 2 and "--type=" not in parts[1]:
++            try:
++                found.append(int(parts[0]))
++            except ValueError:
++                pass
++    return found
 +
 +
 +def _signal(pids: list[int], *, force: bool, platform: Platform) -> None:
@@ -987,10 +1016,10 @@ index 60d81f8758b742402a3cf4629235b784c372f585..f4f09d414f548b638ad7902323e01fd8
          assert by_key["autoswitch.threshold"]["isSet"] is False
 diff --git a/tests/test_desktop.py b/tests/test_desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..93816c5ba1e5083c22d20ae1fc88312aa4da7a34
+index 0000000000000000000000000000000000000000..c83fb963b53698382f52bb8ec50721b616290473
 --- /dev/null
 +++ b/tests/test_desktop.py
-@@ -0,0 +1,642 @@
+@@ -0,0 +1,660 @@
 +"""``cswap desktop``: Claude Desktop, one window per stored account.
 +
 +Claude Desktop keeps one login per profile, and Electron honors
@@ -1188,6 +1217,24 @@ index 0000000000000000000000000000000000000000..93816c5ba1e5083c22d20ae1fc88312a
 +
 +
 +class TestQuit:
++    def test_term_goes_to_the_browser_process_only(self, tmp_path):
++        """Helpers carry ``--type=``; the one that does not owns the window."""
++        ps = "  10 /x/Claude --user-data-dir=/p\n  11 /x/Helper --type=renderer --user-data-dir=/p\n"
++        with patch.object(desktop.subprocess, "run", return_value=MagicMock(stdout=ps)):
++            assert desktop.main_pids([10, 11], Platform.MACOS) == [10]
++        with patch.object(desktop, "running_pids", side_effect=[[10, 11], []]), \
++             patch.object(desktop, "main_pids", return_value=[10]), \
++             patch.object(desktop, "_signal") as sig:
++            assert desktop.quit_instance(tmp_path, timeout=1, platform=Platform.MACOS)
++        assert sig.call_args_list[0].args[0] == [10]
++
++    def test_unknown_main_falls_back_to_every_pid(self, tmp_path):
++        with patch.object(desktop, "running_pids", side_effect=[[10, 11], []]), \
++             patch.object(desktop, "main_pids", return_value=[]), \
++             patch.object(desktop, "_signal") as sig:
++            desktop.quit_instance(tmp_path, timeout=1, platform=Platform.MACOS)
++        assert sig.call_args_list[0].args[0] == [10, 11]
++
 +    def test_nothing_running_is_a_noop(self, tmp_path):
 +        with patch.object(desktop, "running_pids", return_value=[]), \
 +             patch.object(desktop, "_signal") as sig:

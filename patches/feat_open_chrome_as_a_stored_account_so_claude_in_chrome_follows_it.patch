@@ -26,12 +26,14 @@ copies the stock Chrome's last-used profile (`profile.last_used` in
 `Local State`) into the new one and deletes its claude.ai cookies:
 other sites stay signed in, extensions and their settings, bookmarks,
 logins and history carry over, and only Claude is signed out. Caches,
-locks and the open-tabs snapshot are left out; SQLite databases are
-snapshotted through the backup API so a running stock Chrome does not
-tear them; Windows also gets `Local State`, which holds the key the
-cookie jar is encrypted with there. On macOS the cookie jar is behind
-Full Disk Access for terminals, so a refused read fails that account
-with the two ways out (grant the access, or set
+locks and the open-tabs snapshot are left out. Databases are copied as
+plain files with their journal or WAL, the way every tool that reads a
+running Chrome's data does: Chrome holds most of them in exclusive
+locking mode, and SQLite's backup API through Python retries a locked
+source forever. Windows also gets `Local State`, which holds the key
+the cookie jar is encrypted with there. On macOS the cookie jar is
+behind Full Disk Access for terminals, so a refused read fails that
+account with the two ways out (grant the access, or set
 `chrome.cloneStockProfile` false to start empty) instead of leaving a
 half copy. The Web Store page for the extension is only opened when the
 profile does not already carry it. The user then signs in to that
@@ -75,10 +77,10 @@ session and desktop profiles.
 
 diff --git a/src/claude_swap/chrome.py b/src/claude_swap/chrome.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..e49ba7446ca81beaee92e8869647019fcd5fe56b
+index 0000000000000000000000000000000000000000..c85324ba9f0a6e0e80b7054b6bdab7e9c562f8bb
 --- /dev/null
 +++ b/src/claude_swap/chrome.py
-@@ -0,0 +1,709 @@
+@@ -0,0 +1,686 @@
 +"""Chrome with Claude in Chrome, one browser profile per stored account.
 +
 +``cswap switch`` moves Claude Code to another account, but the Claude in
@@ -168,8 +170,9 @@ index 0000000000000000000000000000000000000000..e49ba7446ca81beaee92e8869647019f
 +    "LOCK", "LOG", "LOG.old", "Current Session", "Current Tabs",
 +    "Last Session", "Last Tabs", ".DS_Store",
 +})
++# A database's rollback journal or write-ahead log carries the part of
++# its state not yet in the main file; they travel with it.
 +_SQLITE_SIDECARS = ("-journal", "-wal", "-shm")
-+_SQLITE_MAGIC = b"SQLite format 3\x00"
 +
 +# Where Chrome keeps its cookie jar: under ``Network/`` since Chrome 96,
 +# at the profile root before that. Both are stripped of claude.ai rows.
@@ -285,29 +288,6 @@ index 0000000000000000000000000000000000000000..e49ba7446ca81beaee92e8869647019f
 +    return name if isinstance(name, str) and name and "/" not in name else "Default"
 +
 +
-+def _is_sqlite(path: Path) -> bool:
-+    try:
-+        with open(path, "rb") as fh:
-+            return fh.read(len(_SQLITE_MAGIC)) == _SQLITE_MAGIC
-+    except OSError:
-+        return False
-+
-+
-+def _copy_sqlite(src: Path, dest: Path) -> None:
-+    """A consistent snapshot through SQLite's backup API, which honors the
-+    database's locks and folds in its WAL; a plain file copy of a database
-+    the running browser is writing can be torn."""
-+    source = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
-+    try:
-+        target = sqlite3.connect(dest)
-+        try:
-+            source.backup(target)
-+        finally:
-+            target.close()
-+    finally:
-+        source.close()
-+
-+
 +@dataclass(frozen=True)
 +class CloneReport:
 +    files: int
@@ -317,8 +297,15 @@ index 0000000000000000000000000000000000000000..e49ba7446ca81beaee92e8869647019f
 +def clone_profile(src: Path, dest: Path) -> CloneReport:
 +    """Copy one Chrome profile directory into ``dest`` (which must not exist
 +    or be empty): cookies, logins, extensions and their settings, bookmarks,
-+    history. Caches, locks and the open-tabs snapshot are left out; SQLite
-+    databases are snapshotted through the backup API.
++    history. Caches, locks and the open-tabs snapshot are left out.
++
++    Databases are copied as plain files, journal and WAL alongside, the way
++    every tool that reads a running Chrome's data does. SQLite's backup API
++    would be the consistent way, but Chrome holds most of its databases in
++    exclusive locking mode, and Python's ``Connection.backup`` retries a
++    locked source forever, so it hangs on the first such file. A copy taken
++    while Chrome writes can at worst lose the last few seconds of a site's
++    cookies; the ``stock Chrome is open`` note covers that.
 +
 +    Raises:
 +        PermissionError: the profile cannot be read at all (macOS keeps
@@ -342,26 +329,16 @@ index 0000000000000000000000000000000000000000..e49ba7446ca81beaee92e8869647019f
 +        out_dir = dest / rel_root
 +        out_dir.mkdir(parents=True, exist_ok=True)
 +        for name in sorted(names):
-+            if name in CLONE_SKIP_FILES or name.endswith(_SQLITE_SIDECARS):
++            if name in CLONE_SKIP_FILES:
 +                continue
 +            path = Path(root) / name
 +            if path.is_symlink():
 +                continue
-+            target = out_dir / name
 +            try:
-+                if _is_sqlite(path):
-+                    _copy_sqlite(path, target)
-+                else:
-+                    shutil.copy2(path, target)
++                shutil.copy2(path, out_dir / name)
 +            except PermissionError:
 +                unreadable += 1
 +                continue
-+            except sqlite3.Error:
-+                try:
-+                    shutil.copy2(path, target)
-+                except PermissionError:
-+                    unreadable += 1
-+                    continue
 +            files += 1
 +    return CloneReport(files=files, skipped_unreadable=unreadable)
 +
@@ -421,7 +398,9 @@ index 0000000000000000000000000000000000000000..e49ba7446ca81beaee92e8869647019f
 +    profile["exited_cleanly"] = True
 +    theme = prefs.setdefault("browser", {}).setdefault("theme", {})
 +    theme["user_color"] = _skcolor(rgb)
-+    theme["color_variant"] = 1  # tonal spot: the colour, not a grey derived from it
++    # 3 is Chrome's "vibrant" variant; the default tonal one washes a light
++    # window to a grey the eye does not read as a colour.
++    theme["color_variant"] = 3
 +    theme["is_grayscale"] = False
 +    theme["follows_system_colors"] = False
 +    prefs["autogenerated_theme_color"] = _skcolor(rgb)
@@ -1563,10 +1542,10 @@ index 0000000000000000000000000000000000000000..3806badda3ec1eeb8a08aaa04051e289
 +        assert "chrome --quit <num|email>" in out
 diff --git a/tests/test_chrome_profile.py b/tests/test_chrome_profile.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..4f65561958e53295db598dc68c3e9b8bf0ff1462
+index 0000000000000000000000000000000000000000..6fe615f62510bf5061c20fc21a1a95633af733e0
 --- /dev/null
 +++ b/tests/test_chrome_profile.py
-@@ -0,0 +1,378 @@
+@@ -0,0 +1,379 @@
 +"""``cswap chrome`` first-open preparation: the new account's profile is a
 +copy of the stock Chrome's last-used profile minus its claude.ai cookies,
 +named after the account, with a window colour of its own; and
@@ -1693,10 +1672,10 @@ index 0000000000000000000000000000000000000000..4f65561958e53295db598dc68c3e9b8b
 +            f"Extensions/{chrome.CLAUDE_EXTENSION_ID}/1.0/manifest.json",
 +            "Local Storage/leveldb/000003.log",
 +            "Network/Cookies",
++            "Network/Cookies-journal",  # the journal travels with its database
 +            "Preferences",
 +        ]
-+        assert report.files == 5 and report.skipped_unreadable == 0
-+        # the database went through the backup API and still reads
++        assert report.files == 6 and report.skipped_unreadable == 0
 +        assert "example.com" in _hosts(dest / "Network" / "Cookies")
 +
 +    def test_unreadable_cookie_jar_is_refused_before_copying(self, stock, tmp_path):
@@ -1750,6 +1729,7 @@ index 0000000000000000000000000000000000000000..4f65561958e53295db598dc68c3e9b8b
 +        assert prefs["profile"]["exit_type"] == "Normal"
 +        # 0xFF4285F4 as a signed 32-bit int, the way Chrome writes SkColor
 +        assert prefs["browser"]["theme"]["user_color"] == -12417548
++        assert prefs["browser"]["theme"]["color_variant"] == 3  # vibrant
 +        assert prefs["autogenerated_theme_color"] == -12417548
 +
 +    def test_creates_preferences_in_an_empty_profile(self, tmp_path):
@@ -1779,7 +1759,7 @@ index 0000000000000000000000000000000000000000..4f65561958e53295db598dc68c3e9b8b
 +        assert prefs["profile"]["name"] == "account2@example.com"
 +        assert not (data_dir / "Local State").exists()  # macOS: key is in the Keychain
 +        out = _plain(capsys.readouterr().out)
-+        assert "copied 5 file(s) from Profile 2, dropped 3 claude.ai cookie(s)" in out
++        assert "copied 6 file(s) from Profile 2, dropped 3 claude.ai cookie(s)" in out
 +        assert "copy of your Chrome profile" in out and "side panel" in out
 +
 +    def test_alias_names_the_profile(self, manager, stock, switcher):
