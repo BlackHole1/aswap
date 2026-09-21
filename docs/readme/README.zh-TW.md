@@ -6,6 +6,8 @@
 
 Claude Code 的帳號切換工具：[claude-swap](https://github.com/realiti4/claude-swap) (`cswap`) 加上一組持續維護的修正。
 
+<img src="../images/cswap-list.png" alt="cswap list: two accounts with their 5h, 7d and per-model usage, then cswap switch 2" width="820">
+
 </div>
 
 `cswap` 可在多個 Claude 帳號之間切換，追蹤每個帳號的用量，並把你切到餘量最多的帳號。aswap 是同一套工具，基於未改動的上游原始碼，加上一小份補丁，用來修上游還沒處理的問題。你用的還是 `cswap` 指令。
@@ -49,6 +51,14 @@ aswap upgrade  # 依安裝方式執行 uv tool upgrade aswap 或 pipx upgrade as
 | [依帳號開啟 Claude Desktop](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)     | Claude Desktop 每個 profile 只保留一個登入，想用第二個帳號就得先登出再重新登入，每次皆然。修補給每個已存帳號一個永久的桌面 profile，並以 `--user-data-dir` 啟動應用程式，做法同 [guise](https://github.com/siddhjagani/guise)：`cswap desktop 2` 在獨立視窗開啟帳號 2，登入一次後持續保持登入，其他帳號的視窗可同時開著。Code 分頁的本機工作階段與預設 profile 共享，這樣開啟的視窗能看到同樣的工作階段。 |
 
 每個補丁都是一次提交。提交訊息說明上游的問題。完整清單見 [patches/.patches](../../patches/.patches)。
+
+`cswap refresh` 立即逐個帳號抓取用量，並給出被限流帳號可重試的時間：
+
+<img src="../images/cswap-refresh.png" alt="cswap refresh: one account refreshed, the other rate limited with the server retry time" width="820">
+
+`cswap desktop --all` 為每個已存帳號開啟一個獨立的 Claude Desktop 視窗，各自保持登入：
+
+<img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
 ## 建置方式
 

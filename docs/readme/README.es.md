@@ -6,6 +6,8 @@
 
 Cambio de cuenta para Claude Code: [claude-swap](https://github.com/realiti4/claude-swap) (`cswap`) con un conjunto mantenido de correcciones.
 
+<img src="../images/cswap-list.png" alt="cswap list: two accounts with their 5h, 7d and per-model usage, then cswap switch 2" width="820">
+
 </div>
 
 `cswap` cambia entre varias cuentas de Claude, sigue el uso de cada una y puede pasarte a la cuenta con más cuota restante. aswap es la misma herramienta, construida a partir del código upstream sin modificar más una serie pequeña de parches para los fallos que upstream aún no ha corregido. Sigues ejecutando `cswap`.
@@ -49,6 +51,14 @@ La compilación desde el código fuente y la sustitución del `cswap` de PyPI ya
 | [Abrir Claude Desktop por cuenta](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)                              | Claude Desktop guarda un solo login por perfil, así que usar una segunda cuenta obliga a cerrar sesión y volver a entrar cada vez. El parche da a cada cuenta guardada un perfil de escritorio permanente y abre la aplicación sobre él con `--user-data-dir`, como hace [guise](https://github.com/siddhjagani/guise): `cswap desktop 2` abre la cuenta 2 en su propia ventana, con la sesión iniciada una sola vez y mantenida, mientras las ventanas de las otras cuentas siguen abiertas al lado. Las sesiones locales de la pestaña Code se comparten con el perfil original, así que una ventana abierta así muestra las mismas sesiones. |
 
 Cada parche es un commit. El mensaje del commit explica el problema upstream. La lista completa está en [patches/.patches](../../patches/.patches).
+
+`cswap refresh` obtiene el uso ahora mismo, cuenta por cuenta, e indica cuándo puede reintentar una cuenta limitada:
+
+<img src="../images/cswap-refresh.png" alt="cswap refresh: one account refreshed, the other rate limited with the server retry time" width="820">
+
+`cswap desktop --all` abre una ventana de Claude Desktop por cada cuenta guardada, cada una con su propia sesión iniciada:
+
+<img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
 ## Cómo está construido
 
