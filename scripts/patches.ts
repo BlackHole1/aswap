@@ -172,8 +172,11 @@ function comparable(text: string): string {
 }
 
 function formatPatch(sha: string): string {
-  return (
-    git([
+  // Verbatim, not through git(): its trimEnd() would eat a whitespace-only
+  // context line at the very end of the last hunk (a blank line between two
+  // defs, say) and leave a patch that `git am` rejects as corrupt.
+  const r = gitTry(
+    [
       "format-patch",
       "-1",
       "--stdout",
@@ -184,8 +187,11 @@ function formatPatch(sha: string): string {
       "--full-index",
       "--no-numbered",
       sha,
-    ]) + "\n"
+    ],
+    SUB,
   );
+  if (r.code !== 0) throw new Error(`git format-patch ${sha} failed:\n${r.stderr || r.stdout}`);
+  return r.stdout;
 }
 
 interface Exported {
