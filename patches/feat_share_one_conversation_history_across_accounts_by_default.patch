@@ -1,0 +1,597 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kevin Cui <bh@bugs.cc>
+Date: Mon, 21 Sep 2026 03:44:41 -0400
+Subject: feat: share one conversation history across accounts by default
+
+`cswap run` gives every account a profile of its own under
+`CLAUDE_CONFIG_DIR`, and the profile's `projects/` (what `claude --resume`
+lists) is per account unless the launch carries `--share-history`. The
+flag is per launch and there is no setting behind it: forget it once and
+`_sync_sharing` unlinks the profile from `~/.claude` again, and the
+account starts a second, private history. The same-account fast path
+makes it worse. When account N is the default login, `cswap run N` runs
+plain `claude` on `~/.claude` and skips the profile entirely, so one
+account's sessions land in two places depending on who was the default
+at the time. Whoever switches the default and then reaches for `--resume`
+finds a conversation missing (realiti4/claude-swap#239), and the profile
+of the account that is the default can never be merged, because the code
+that merges never runs for it.
+
+A conversation belongs to the user, not to the account that happened to
+run it, so sharing is now the default and is persisted:
+
+- `session.shareHistory` (settings.json, `cswap config`) is the durable
+  choice, default true. `--share-history` / `--no-share-history` override
+  it for one launch; with neither flag `run()` follows the setting. On
+  Windows the setting is ignored (history sharing is not available there),
+  while an explicit `--share-history` is still refused.
+- The same-account fast path syncs the profile before exec'ing plain
+  claude, so history the account accumulated while it was not the default
+  is merged into `~/.claude` and linked right away, instead of waiting for
+  a launch that never comes while the account stays the default.
+
+Together with the previous patch, every launch (`claude`, `cswap run N`
+as the default or not) reads and writes one history, and a profile that
+forked before the setting existed folds back in on its next launch
+without losing a file.
+
+diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
+index e14dcb1bc712c3809640299c66a44808dfe41da6..6557093b52dff125ca65ed421b0d759b03fad6d1 100644
+--- a/src/claude_swap/cli.py
++++ b/src/claude_swap/cli.py
+@@ -130,7 +130,7 @@ Examples:
+   cswap run 2
+   cswap run user@example.com
+   cswap run 2 --no-share
+-  cswap run 2 --share-history
++  cswap run 2 --no-share-history
+   cswap run 2 --require-session
+   cswap run 2 -- --resume
+         """,
+@@ -154,13 +154,15 @@ Examples:
+     parser.add_argument(
+         "--share-history",
+         action=argparse.BooleanOptionalAction,
+-        default=False,
++        default=None,
+         help=(
+             "Share conversation history (projects/ and history.jsonl) from "
+             "~/.claude into the session profile, so every account sees one "
+             "unified history. History the profile already accumulated is "
+-            "merged into ~/.claude first. --no-share-history restores "
+-            "per-account history (the default). Not supported on Windows."
++            "merged into ~/.claude first. --no-share-history keeps this "
++            "launch's history per account. Neither flag: the "
++            "session.shareHistory setting (default: share). Not supported "
++            "on Windows."
+         ),
+     )
+     parser.add_argument(
+diff --git a/src/claude_swap/session.py b/src/claude_swap/session.py
+index 8f741fb382f56a66bcf85348e3e8fb17f626eaeb..dd7da39de39436aa353b97fd0cc4299a519f2431 100644
+--- a/src/claude_swap/session.py
++++ b/src/claude_swap/session.py
+@@ -22,13 +22,18 @@ detects symlinks and writes through to the target, so in-session ``/config``
+ changes land in ``~/.claude``), copies re-synced on every launch on Windows.
+ A manifest records what cswap created so removal never touches user data.
+ 
+-History sharing (``--share-history``, opt-in): additionally links
+-``projects/`` (conversation transcripts — what ``claude --resume`` lists) and
+-``history.jsonl`` (prompt history) from ``~/.claude``, so all accounts see one
++History sharing (on by default via the ``session.shareHistory`` setting;
++``--share-history`` / ``--no-share-history`` override it for one launch):
++additionally links ``projects/`` (conversation transcripts — what ``claude
++--resume`` lists) and ``history.jsonl`` (prompt history) from ``~/.claude``,
++so every account, and plain ``claude`` on the default login, sees one
+ unified conversation history. POSIX-only: Windows shares by re-synced copy,
+ which would fork history rather than share it. If the profile already
+ accumulated its own history, it is merged into ``~/.claude`` first so nothing
+-disappears from ``--resume``.
++disappears from ``--resume``. The same-account fast path (the account is the
++default login, so plain ``claude`` runs on ``~/.claude``) syncs the profile
++too: history it accumulated while the account was not the default must join
++the shared history, or it stays invisible until the next switch.
+ 
+ This module must not import ``switcher`` (switcher imports us for the
+ session-aware guards); it receives a ``ClaudeAccountSwitcher`` instance.
+@@ -62,7 +67,7 @@ from claude_swap.models import Platform
+ from claude_swap.paths import get_default_global_config_path
+ from claude_swap.printer import accent, dimmed, muted, warning
+ from claude_swap.process_detection import ClaudeSession, scan_sessions
+-from claude_swap.settings import atomic_write_json
++from claude_swap.settings import atomic_write_json, load_session_settings
+ 
+ if TYPE_CHECKING:
+     from claude_swap.switcher import ClaudeAccountSwitcher
+@@ -70,8 +75,8 @@ if TYPE_CHECKING:
+ # Items mirrored from ~/.claude into session profiles when sharing is on.
+ # Deliberately excludes anything account- or instance-scoped: plugins/,
+ # sessions/, ide/, .claude.json, .credentials.json, statsig/ and other
+-# telemetry. projects/ and history.jsonl are per-account by default and move
+-# to HISTORY_ITEMS sharing only with the opt-in --share-history flag.
++# telemetry. projects/ and history.jsonl are HISTORY_ITEMS, governed by the
++# session.shareHistory setting and the --share-history flag.
+ # .claude.json stays excluded as a file, but its one user-scoped key —
+ # top-level mcpServers — is mirrored separately by _sync_mcp_servers.
+ SHARED_ITEMS = (
+@@ -549,11 +554,16 @@ class SessionManager:
+         identifier: str,
+         claude_args: list[str],
+         share: bool = True,
+-        share_history: bool = False,
++        share_history: bool | None = None,
+         require_session: bool = False,
+     ) -> NoReturn:
+         """Launch Claude Code as the given account in the current terminal.
+ 
++        ``share_history`` is the ``--share-history`` / ``--no-share-history``
++        flag; ``None`` (neither given) follows the ``session.shareHistory``
++        setting, which is off on Windows whatever the file says, while an
++        explicit ``--share-history`` there is still a refusal.
++
+         ``require_session`` turns the same-account fast path (a plain claude
+         launch on the default login) into a refusal: a wrapper that hands a
+         terminal to one account per session needs the isolation guaranteed,
+@@ -571,6 +581,11 @@ class SessionManager:
+                 "re-synced copies there, which would fork the history instead "
+                 "of sharing it."
+             )
++        if share_history is None:
++            share_history = (
++                self.switcher.platform != Platform.WINDOWS
++                and load_session_settings(self.switcher.backup_dir).share_history
++            )
+ 
+         account_num, email, org_uuid = self.switcher.resolve_account(identifier)
+         # Guard before the same-account direct-launch fast path below (which
+@@ -608,6 +623,16 @@ class SessionManager:
+                         "default login — launching claude directly."
+                     )
+                 )
++                # This launch runs on ~/.claude, but the account's profile
++                # may hold history from launches made while it was not the
++                # default login. Bring the profile to the state these flags
++                # describe now — merging that history into ~/.claude and
++                # linking — or those sessions stay invisible to --resume
++                # until the account is next launched off the default login.
++                session_dir = session_dir_for(
++                    self.switcher.backup_dir, account_num, email
++                )
++                self._sync_sharing(session_dir, share, share_history)
+                 self._exec(claude_bin, claude_args, env=dict(os.environ))
+ 
+         scrubbed = [v for v in AUTH_OVERRIDE_ENV_VARS if os.environ.get(v)]
+diff --git a/src/claude_swap/settings.py b/src/claude_swap/settings.py
+index 2c978f3678df8eb0a64291f55b1c8146612070c6..fd3d0df9f742b20dd021b94a56ffac7e2cd64415 100644
+--- a/src/claude_swap/settings.py
++++ b/src/claude_swap/settings.py
+@@ -2,7 +2,8 @@
+ 
+ One versioned JSON file for user-tunable claude-swap preferences, written
+ atomically with the backup dir's 0600/0700 modes. v1 carries the
+-``autoswitch`` and ``ui`` sections; other sections can be added additively.
++``autoswitch``, ``ui`` and ``session`` sections; other sections can be added
++additively.
+ Unknown keys (future fields, other tools' experiments) survive a round trip.
+ 
+ Reading is forgiving — a missing or corrupt file yields defaults with a logged
+@@ -67,7 +68,28 @@ class UiSettings:
+     theme: str = "auto"
+ 
+ 
+-_SECTION_DEFAULT_SOURCES = {"autoswitch": AutoSwitchSettings, "ui": UiSettings}
++@dataclass(frozen=True)
++class SessionSettings:
++    """Session-mode preferences (``session`` section).
++
++    ``share_history`` makes every ``cswap run`` link the profile's
++    ``projects/`` and ``history.jsonl`` to ``~/.claude``, so every account,
++    and plain ``claude`` on the default login, resumes one conversation
++    history. On by default: a conversation is the user's, not the account's,
++    and the account a session happened to run under is not something anyone
++    remembers when they reach for ``--resume``. ``--share-history`` and
++    ``--no-share-history`` override it for one launch. Ignored on Windows,
++    where history sharing is not available.
++    """
++
++    share_history: bool = True
++
++
++_SECTION_DEFAULT_SOURCES = {
++    "autoswitch": AutoSwitchSettings,
++    "ui": UiSettings,
++    "session": SessionSettings,
++}
+ 
+ 
+ @dataclass(frozen=True)
+@@ -79,7 +101,7 @@ class SettingSpec:
+     (`parse_setting_value`) read from here, so the two can't drift.
+     """
+ 
+-    section: str  # top-level JSON section ("autoswitch", "ui")
++    section: str  # top-level JSON section ("autoswitch", "ui", "session")
+     json_key: str  # camelCase key inside the section
+     field: str  # snake_case AutoSwitchSettings field
+     kind: str  # "float" | "int" | "bool" | "choice"
+@@ -139,6 +161,10 @@ SETTING_SPECS: dict[str, SettingSpec] = {
+             "ui", "theme", "theme", "choice", choices=("dark", "light", "auto"),
+             help="Color theme; auto follows the terminal background",
+         ),
++        SettingSpec(
++            "session", "shareHistory", "share_history", "bool",
++            help="cswap run shares one conversation history across accounts",
++        ),
+     )
+ }
+ 
+@@ -248,6 +274,24 @@ def load_ui_settings(backup_root: Path) -> UiSettings:
+     return UiSettings(theme=theme)
+ 
+ 
++def load_session_settings(backup_root: Path) -> SessionSettings:
++    """Load the session section; missing/corrupt file or bad type → default."""
++    raw = _read_raw(settings_path(backup_root))
++    section = raw.get("session")
++    default = SessionSettings()
++    if not isinstance(section, dict):
++        return default
++    share_history = section.get("shareHistory", default.share_history)
++    if not isinstance(share_history, bool):
++        _logger.warning(
++            "settings.json: session.shareHistory must be true or false, got %r; "
++            "using %r",
++            share_history, default.share_history,
++        )
++        return default
++    return SessionSettings(share_history=share_history)
++
++
+ def save_settings(backup_root: Path, settings: AutoSwitchSettings) -> None:
+     """Write the autoswitch section, preserving unknown keys and sections."""
+     path = settings_path(backup_root)
+@@ -412,6 +456,7 @@ def effective_settings(backup_root: Path) -> list[tuple[SettingSpec, object, boo
+     loaded = {
+         "autoswitch": load_settings(backup_root),
+         "ui": load_ui_settings(backup_root),
++        "session": load_session_settings(backup_root),
+     }
+     rows = []
+     for spec in SETTING_SPECS.values():
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index 09c800ef1e9b1425833bdc1fce622c90e5dd54c9..6f604300d0e5b418b53e0444cd00507b0769711a 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -741,7 +741,7 @@ class TestRunCommand:
+                 identifier,
+                 claude_args,
+                 share=True,
+-                share_history=False,
++                share_history=None,
+                 require_session=False,
+             ):
+                 calls.append((
+@@ -757,16 +757,17 @@ class TestRunCommand:
+         return calls
+ 
+     def test_run_dispatches_with_defaults(self):
++        """Neither history flag: None, so run() follows session.shareHistory."""
+         calls = self._dispatch(["run", "2"])
+-        assert ("run", "2", [], True, False, False) in calls
++        assert ("run", "2", [], True, None, False) in calls
+ 
+     def test_run_by_email(self):
+         calls = self._dispatch(["run", "user@example.com"])
+-        assert ("run", "user@example.com", [], True, False, False) in calls
++        assert ("run", "user@example.com", [], True, None, False) in calls
+ 
+     def test_no_share_flag(self):
+         calls = self._dispatch(["run", "2", "--no-share"])
+-        assert ("run", "2", [], False, False, False) in calls
++        assert ("run", "2", [], False, None, False) in calls
+ 
+     def test_share_history_flag(self):
+         calls = self._dispatch(["run", "2", "--share-history"])
+@@ -778,16 +779,16 @@ class TestRunCommand:
+ 
+     def test_require_session_flag(self):
+         calls = self._dispatch(["run", "2", "--require-session"])
+-        assert ("run", "2", [], True, False, True) in calls
++        assert ("run", "2", [], True, None, True) in calls
+ 
+     def test_tail_forwarded_verbatim(self):
+         calls = self._dispatch(["run", "2", "--", "--resume", "--model", "x"])
+-        assert ("run", "2", ["--resume", "--model", "x"], True, False, False) in calls
++        assert ("run", "2", ["--resume", "--model", "x"], True, None, False) in calls
+ 
+     def test_tail_may_contain_run_flags(self):
+         """Args after `--` are NOT parsed by cswap, even if they look like ours."""
+         calls = self._dispatch(["run", "2", "--", "--no-share"])
+-        assert ("run", "2", ["--no-share"], True, False, False) in calls
++        assert ("run", "2", ["--no-share"], True, None, False) in calls
+ 
+     def test_run_unknown_flag_errors(self, capsys):
+         with patch.object(sys, "argv", ["claude-swap", "run", "2", "--bogus"]):
+@@ -832,7 +833,7 @@ class TestRunCommand:
+                 identifier,
+                 claude_args,
+                 share=True,
+-                share_history=False,
++                share_history=None,
+                 require_session=False,
+             ):
+                 from claude_swap.exceptions import SessionError
+@@ -941,7 +942,7 @@ class TestSubcommandAliases:
+                 identifier,
+                 claude_args,
+                 share=True,
+-                share_history=False,
++                share_history=None,
+                 require_session=False,
+             ):
+                 calls.append((identifier, claude_args, share))
+@@ -1538,7 +1539,7 @@ class TestRunAutoResolve:
+                 identifier,
+                 claude_args,
+                 share=True,
+-                share_history=False,
++                share_history=None,
+                 require_session=False,
+             ):
+                 calls.append(("run", identifier, claude_args, share, share_history))
+@@ -1585,7 +1586,7 @@ class TestRunAutoResolve:
+              patch("os.geteuid", return_value=1000, create=True), \
+              patch.object(sys, "argv", ["claude-swap", "run"]):
+             cli.main()
+-        assert ("run", "2", [], True, False) in calls
++        assert ("run", "2", [], True, None) in calls
+ 
+     def test_mapped_subdir_inherits(self, tmp_path, monkeypatch):
+         from claude_swap.mappings import MappingStore
+@@ -1609,7 +1610,7 @@ class TestRunAutoResolve:
+              patch("os.geteuid", return_value=1000, create=True), \
+              patch.object(sys, "argv", ["claude-swap", "run"]):
+             cli.main()
+-        assert ("run", "2", [], True, False) in calls
++        assert ("run", "2", [], True, None) in calls
+ 
+     def test_unmapped_dir_falls_back_to_default(self, tmp_path, monkeypatch, capsys):
+         backup = tmp_path / "backup"
+@@ -1658,7 +1659,7 @@ class TestRunAutoResolve:
+              patch("os.geteuid", return_value=1000, create=True), \
+              patch.object(sys, "argv", ["claude-swap", "run", "3"]):
+             cli.main()
+-        assert ("run", "3", [], True, False) in calls
++        assert ("run", "3", [], True, None) in calls
+ 
+     def test_no_account_forwards_tail(self, tmp_path, monkeypatch):
+         from claude_swap.mappings import MappingStore
+@@ -1681,7 +1682,7 @@ class TestRunAutoResolve:
+              patch("os.geteuid", return_value=1000, create=True), \
+              patch.object(sys, "argv", ["claude-swap", "run", "--", "--resume"]):
+             cli.main()
+-        assert ("run", "2", ["--resume"], True, False) in calls
++        assert ("run", "2", ["--resume"], True, None) in calls
+ 
+     def test_no_account_forwards_share_history(self, tmp_path, monkeypatch):
+         """--share-history survives the mapped-account resolution path."""
+diff --git a/tests/test_config_cli.py b/tests/test_config_cli.py
+index 51d835ae8ec5e8ef62571cdb48dfd09a848990e2..60d81f8758b742402a3cf4629235b784c372f585 100644
+--- a/tests/test_config_cli.py
++++ b/tests/test_config_cli.py
+@@ -49,9 +49,10 @@ class TestConfigList:
+             "autoswitch.unhealthyTicks",
+             "autoswitch.model",
+             "ui.theme",
++            "session.shareHistory",
+         ):
+             assert key in out
+-        assert out.count("(default)") == 9
++        assert out.count("(default)") == 10
+ 
+     def test_set_key_not_marked_default(self, temp_home, capsys):
+         _run(["set", "autoswitch.cooldownSeconds", "600"], capsys)
+@@ -78,7 +79,8 @@ class TestConfigList:
+         assert payload["schemaVersion"] == 1
+         assert payload["path"].endswith("settings.json")
+         by_key = {entry["key"]: entry for entry in payload["settings"]}
+-        assert len(by_key) == 9
++        assert len(by_key) == 10
++        assert by_key["session.shareHistory"]["value"] is True
+         assert by_key["autoswitch.threshold"]["value"] == 90.0
+         assert by_key["autoswitch.threshold"]["isSet"] is False
+         assert by_key["autoswitch.includeApiKeyAccounts"]["value"] is False
+diff --git a/tests/test_session.py b/tests/test_session.py
+index 70a6649de4aa4b106aca5d7b0e8bd878df5737dc..c1d696256ea438f0fa180bb6ff8da9acc8e92537 100644
+--- a/tests/test_session.py
++++ b/tests/test_session.py
+@@ -26,6 +26,7 @@ from claude_swap.exceptions import (
+ )
+ from claude_swap.models import Platform
+ from claude_swap.paths import get_global_config_path
++from claude_swap.settings import set_setting
+ from claude_swap.session import (
+     HISTORY_CONFLICTS_DIRNAME,
+     MCP_DISPLACED_STASH,
+@@ -2068,6 +2069,88 @@ class TestShareHistoryPosix:
+         assert (proj / "bbb.jsonl").read_text() == "profile-b\n"
+ 
+ 
++@pytest.mark.skipif(sys.platform == "win32", reason="history sharing is POSIX-only")
++class TestShareHistoryDefault:
++    """run() with neither flag follows session.shareHistory (default: on)."""
++
++    def _linked(self, session_dir: Path, source: Path) -> bool:
++        return (
++            (session_dir / "projects").is_symlink()
++            and (session_dir / "projects").readlink() == source / "projects"
++        )
++
++    def test_shared_without_flag(
++        self, history_setup, capture_exec, auth_status_tracks_seed, refresh_rotates
++    ):
++        source, session_dir, mgr = history_setup
++        with pytest.raises(_ExecCalled) as exc:
++            mgr.run(ACCOUNT_NUM, [])
++
++        assert exc.value.env["CLAUDE_CONFIG_DIR"] == str(session_dir)
++        assert self._linked(session_dir, source)
++
++    def test_setting_off_keeps_history_per_account(
++        self, history_setup, capture_exec, auth_status_tracks_seed, refresh_rotates
++    ):
++        source, session_dir, mgr = history_setup
++        set_setting(mgr.switcher.backup_dir, "session.shareHistory", "false")
++        with pytest.raises(_ExecCalled):
++            mgr.run(ACCOUNT_NUM, [])
++
++        assert not (session_dir / "projects").exists()
++
++    def test_flag_overrides_setting_for_one_launch(
++        self, history_setup, capture_exec, auth_status_tracks_seed, refresh_rotates
++    ):
++        source, session_dir, mgr = history_setup
++        set_setting(mgr.switcher.backup_dir, "session.shareHistory", "false")
++        with pytest.raises(_ExecCalled):
++            mgr.run(ACCOUNT_NUM, [], share_history=True)
++        assert self._linked(session_dir, source)
++
++        with pytest.raises(_ExecCalled):
++            mgr.run(ACCOUNT_NUM, [], share_history=False)
++        assert not (session_dir / "projects").exists()
++
++    def test_fast_path_folds_orphaned_profile_history_in(
++        self, history_setup, capture_exec, monkeypatch
++    ):
++        # The account is the default login, so plain claude runs on ~/.claude.
++        # Sessions it ran while it was NOT the default live in its profile;
++        # they must join the shared history now, not on some later launch.
++        source, session_dir, mgr = history_setup
++        proj = session_dir / "projects" / "-home-user-app"
++        proj.mkdir(parents=True)
++        (proj / "bbb.jsonl").write_text("profile-b\n")
++        monkeypatch.setattr(
++            mgr.switcher, "_get_current_account", lambda: (ACCOUNT_EMAIL, ORG_UUID)
++        )
++
++        with pytest.raises(_ExecCalled) as exc:
++            mgr.run(ACCOUNT_NUM, [])
++
++        assert "CLAUDE_CONFIG_DIR" not in exc.value.env
++        assert (
++            source / "projects" / "-home-user-app" / "bbb.jsonl"
++        ).read_text() == "profile-b\n"
++        assert self._linked(session_dir, source)
++
++    def test_fast_path_without_profile_is_a_plain_launch(
++        self, manager, capture_exec, monkeypatch, temp_home
++    ):
++        monkeypatch.setattr(
++            manager.switcher,
++            "_get_current_account",
++            lambda: (ACCOUNT_EMAIL, ORG_UUID),
++        )
++        with pytest.raises(_ExecCalled):
++            manager.run(ACCOUNT_NUM, [])
++
++        assert not session_dir_for(
++            manager.switcher.backup_dir, ACCOUNT_NUM, ACCOUNT_EMAIL
++        ).exists()
++
++
+ class TestShareHistoryWindows:
+     def test_sync_never_links_history_in_copy_mode(self, history_setup):
+         source, session_dir, mgr = history_setup
+@@ -2088,6 +2171,29 @@ class TestShareHistoryWindows:
+         with pytest.raises(SessionError, match="Windows"):
+             mgr.run(ACCOUNT_NUM, [], share=True, share_history=True)
+ 
++    def test_run_ignores_setting(self, history_setup, monkeypatch):
++        """The default-on setting must not turn every Windows launch into a
++        refusal; only an explicit --share-history is one."""
++        source, session_dir, mgr = history_setup
++        mgr.switcher.platform = Platform.WINDOWS
++        monkeypatch.setattr(
++            session_mod.shutil, "which", lambda _name: "/usr/bin/claude"
++        )
++        seen = {}
++
++        def fake_setup(identifier, share, share_history=False):
++            seen["share_history"] = share_history
++            return session_dir, ACCOUNT_NUM, ACCOUNT_EMAIL
++
++        monkeypatch.setattr(mgr, "setup_session", fake_setup)
++        monkeypatch.setattr(
++            mgr, "_exec", lambda *a, **k: (_ for _ in ()).throw(_ExecCalled(*a[:2], k.get("env")))
++        )
++
++        with pytest.raises(_ExecCalled):
++            mgr.run(ACCOUNT_NUM, [], share=True)
++        assert seen["share_history"] is False
++
+ 
+ class TestReadSessionCredentials:
+     """The profile's current credential JSON: keychain first, then plaintext."""
+diff --git a/tests/test_settings.py b/tests/test_settings.py
+index cd0fe54a878568f54f33601b67d3676b302b70cb..f72e30a7a86dc39d91e7df1f0c7bb8787cf6c2e9 100644
+--- a/tests/test_settings.py
++++ b/tests/test_settings.py
+@@ -15,8 +15,10 @@ from claude_swap.settings import (
+     SETTING_SPECS,
+     atomic_write_json,
+     AutoSwitchSettings,
++    SessionSettings,
+     UiSettings,
+     effective_settings,
++    load_session_settings,
+     load_settings,
+     load_ui_settings,
+     merged_with_cli,
+@@ -152,6 +154,29 @@ class TestUiSettings:
+             set_setting(tmp_path, "ui.theme", "purple")
+ 
+ 
++class TestSessionSettings:
++    def test_missing_file_shares_history(self, tmp_path: Path):
++        assert load_session_settings(tmp_path).share_history is True
++
++    def test_reads_false(self, tmp_path: Path):
++        settings_path(tmp_path).write_text(
++            json.dumps({"session": {"shareHistory": False}})
++        )
++        assert load_session_settings(tmp_path).share_history is False
++
++    def test_non_bool_falls_back_to_default(self, tmp_path: Path):
++        settings_path(tmp_path).write_text(
++            json.dumps({"session": {"shareHistory": "no"}})
++        )
++        assert load_session_settings(tmp_path).share_history is True
++
++    def test_set_and_unset_share_history(self, tmp_path: Path):
++        set_setting(tmp_path, "session.shareHistory", "false")
++        assert load_session_settings(tmp_path).share_history is False
++        assert unset_setting(tmp_path, "session.shareHistory") is True
++        assert load_session_settings(tmp_path).share_history is True
++
++
+ class TestSettingSpecs:
+     def test_registry_covers_every_dataclass_field(self):
+         by_section: dict[str, set[str]] = {}
+@@ -163,9 +188,16 @@ class TestSettingSpecs:
+         assert by_section["ui"] == {
+             f.name for f in UiSettings.__dataclass_fields__.values()
+         }
++        assert by_section["session"] == {
++            f.name for f in SessionSettings.__dataclass_fields__.values()
++        }
+ 
+     def test_defaults_match_dataclass(self):
+-        sources = {"autoswitch": AutoSwitchSettings(), "ui": UiSettings()}
++        sources = {
++            "autoswitch": AutoSwitchSettings(),
++            "ui": UiSettings(),
++            "session": SessionSettings(),
++        }
+         for spec in SETTING_SPECS.values():
+             assert spec.default == getattr(sources[spec.section], spec.field)
+ 
