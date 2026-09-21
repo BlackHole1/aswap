@@ -1,0 +1,1215 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kevin Cui <bh@bugs.cc>
+Date: Mon, 21 Sep 2026 05:26:42 -0400
+Subject: feat: open Claude Desktop as a stored account, one window per account
+
+Claude Desktop keeps one login per profile: to use a second account the
+user signs out, types the email again, waits for the code, and the first
+account is gone. cswap already knows every account, but only for Claude
+Code; nothing lets the desktop app follow the same table.
+
+The app is Electron, and Electron honors `--user-data-dir`, so a
+separate profile directory is a separate, independently signed-in copy
+of the app (the approach of siddhjagani/guise). `cswap desktop
+<num|email ...>` gives each stored account a permanent profile under
+`<backup>/desktop/<num>-<email slug>/` and opens the app against it
+(`open -n -a Claude.app --args --user-data-dir=<dir>` on macOS, the
+executable detached elsewhere). The first open shows a sign-in; after
+that the account stays signed in, and several accounts can be open side
+by side. A window is found again by the exact `--user-data-dir=<dir>`
+token on its command line, so a second open brings it forward instead
+of duplicating it; `--quit` sends TERM, then KILL after a timeout; a
+bare `cswap desktop` lists which accounts are open. Nothing reads,
+copies or migrates a login: Claude owns everything in the profile.
+
+The app is looked up in the stock install location (`/Applications` or
+`~/Applications` on macOS, `%LOCALAPPDATA%\AnthropicClaude` on Windows)
+or the new `desktop.appPath` setting; Linux has no official build and
+says so. Removing an account refuses while its window is open and
+otherwise deletes the profile with the slot, and `purge` refuses while
+any window is open and lists the profiles it removes, the same way both
+treat session profiles.
+
+diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
+index 6557093b52dff125ca65ed421b0d759b03fad6d1..f3bafd4e4f318d5e0e954d2bbee926205e9ed5c6 100644
+--- a/src/claude_swap/cli.py
++++ b/src/claude_swap/cli.py
+@@ -387,6 +387,80 @@ def _refresh_command(argv: list[str]) -> None:
+         sys.exit(code)
+ 
+ 
++def _desktop_command(argv: list[str]) -> None:
++    """Handle `cswap desktop [num|email ...] [--all] [--quit]`.
++
++    Claude Desktop keeps one login per profile, so a second account means
++    signing the first one out. Each stored account gets its own permanent
++    profile directory here, and the app is opened against it with
++    ``--user-data-dir``; the accounts stay signed in side by side, each in
++    its own window. Nothing copies a login: sign in once per account.
++    """
++    parser = argparse.ArgumentParser(
++        prog=f"{_prog_name()} desktop",
++        description=(
++            "Open Claude Desktop as a stored account, in its own window with "
++            "its own login. Every account has a permanent profile; the first "
++            "open shows a sign-in, after that the account stays signed in. "
++            "Several accounts can be open at once. With no account: list "
++            "each account's window. Exits 1 if any account could not be "
++            "opened."
++        ),
++        formatter_class=argparse.RawDescriptionHelpFormatter,
++        epilog="""
++Examples:
++  cswap desktop                 # which accounts have a window open
++  cswap desktop 2               # open account 2 (or bring its window forward)
++  cswap desktop work personal   # by alias or email; several at once
++  cswap desktop --all           # every account, one window each
++  cswap desktop --quit 2        # close account 2's window
++  cswap config set desktop.appPath /path/to/Claude.app   # non-standard install
++        """,
++    )
++    parser.add_argument(
++        "accounts",
++        nargs="*",
++        metavar="num|email",
++        help="Accounts to open (number, alias or email)",
++    )
++    parser.add_argument(
++        "--all", action="store_true", help="Every stored account",
++    )
++    parser.add_argument(
++        "--quit", action="store_true",
++        help="Close the given accounts' windows instead of opening them",
++    )
++    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
++    args = parser.parse_args(argv)
++    if args.all and args.accounts:
++        parser.error("--all takes no accounts")
++    if args.quit and not (args.all or args.accounts):
++        parser.error("--quit needs an account or --all")
++
++    try:
++        switcher = ClaudeAccountSwitcher(debug=args.debug)
++        _guard_root(switcher)
++
++        from claude_swap.desktop import DesktopManager
++
++        manager = DesktopManager(switcher)
++        if args.quit:
++            code = manager.quit(args.accounts, args.all)
++        elif args.all or args.accounts:
++            code = manager.open(args.accounts, args.all)
++        else:
++            manager.show()
++            code = 0
++    except ClaudeSwitchError as e:
++        error(f"Error: {e}")
++        sys.exit(1)
++    except KeyboardInterrupt:
++        print(f"\n{dimmed('Operation cancelled')}")
++        sys.exit(130)
++    if code:
++        sys.exit(code)
++
++
+ def _unclaimed_command(argv: list[str]) -> None:
+     """Handle `cswap unclaimed [--purge ID]` — inspect or drop a stash row.
+ 
+@@ -1052,6 +1126,9 @@ def main() -> None:
+     if argv and argv[0] == "refresh":
+         _refresh_command(argv[1:])
+         return
++    if argv and argv[0] == "desktop":
++        _desktop_command(argv[1:])
++        return
+     if argv and argv[0] == "alias":
+         _alias_command(argv[1:])
+         return
+@@ -1092,6 +1169,10 @@ Commands:
+   %(prog)s enable <num|email>         return a disabled account to rotation
+   %(prog)s run <num|email> [-- ...]   run as an account, this terminal only
+   %(prog)s run                        run the current dir's mapped account
++  %(prog)s desktop <num|email ...>    open Claude Desktop as an account, own window
++  %(prog)s desktop --all              one Claude Desktop window per account
++  %(prog)s desktop --quit <num|email> close an account's Claude Desktop window
++  %(prog)s desktop                    which accounts have a window open
+   %(prog)s map <num|email> [path]     map a directory to an account
+   %(prog)s map                        list directory mappings
+   %(prog)s unmap [path]               remove a directory mapping
+@@ -1123,6 +1204,7 @@ Aliases: ls=list  rm=remove  update=upgrade""",
+   %(prog)s add --slot 3                      # add to a specific slot
+   %(prog)s add-token sk-ant-oat01-... --email me@example.com
+   %(prog)s run 2 -- --resume                 # forward args after '--' to claude
++  %(prog)s desktop 2                         # Claude Desktop signed in as account 2
+   %(prog)s auto --once                       # single auto-switch tick (cron-friendly)
+   %(prog)s config set autoswitch.threshold 80
+ 
+diff --git a/src/claude_swap/desktop.py b/src/claude_swap/desktop.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..0bac7b0e1413a1de61bfeca521800387e6aca904
+--- /dev/null
++++ b/src/claude_swap/desktop.py
+@@ -0,0 +1,434 @@
++"""Claude Desktop, one window per stored account.
++
++Claude Desktop holds one login per profile: to use a second account the
++user signs out, signs in again, and the first account is gone. The app is
++Electron, and Electron honors ``--user-data-dir``, so a separate profile
++directory is a separate, independently logged-in copy of the app. This
++module gives every stored account its own permanent profile under
++``<backup>/desktop/<num>-<email slug>/`` and opens the app against it.
++Nothing here reads, copies or migrates a login: Claude owns everything
++inside the profile, and the user signs in once per account.
++
++Detection follows the profile, not the app: a Claude process whose command
++line carries exactly our ``--user-data-dir=<dir>`` is that account's window.
++The same approach as https://github.com/siddhjagani/guise, ported to the
++account table cswap already keeps.
++"""
++
++from __future__ import annotations
++
++import os
++import re
++import shutil
++import subprocess
++import sys
++import time
++from dataclasses import dataclass
++from pathlib import Path
++from typing import TYPE_CHECKING
++
++from claude_swap.exceptions import AccountNotFoundError, ConfigError, SessionError
++from claude_swap.models import Platform
++from claude_swap.printer import accent, bold_accent, dimmed, error, muted
++from claude_swap.session import slugify_email
++
++if TYPE_CHECKING:
++    from claude_swap.switcher import ClaudeAccountSwitcher
++
++DESKTOP_DIRNAME = "desktop"
++USER_DATA_FLAG = "--user-data-dir"
++QUIT_TIMEOUT_S = 5.0
++
++
++def desktop_dir_for(backup_dir: Path, account_num: str, email: str) -> Path:
++    """Profile directory Claude Desktop is opened against for an account.
++
++    Same ``<num>-<slug>`` naming as session profiles, under ``desktop/``
++    instead of ``sessions/``, so the two never collide and ``purge`` sweeps
++    both with the backup root.
++    """
++    return backup_dir / DESKTOP_DIRNAME / f"{account_num}-{slugify_email(email)}"
++
++
++def default_app_candidates(platform: Platform | None = None) -> list[Path]:
++    """Where a stock Claude Desktop install lives, most likely first."""
++    platform = platform or Platform.detect()
++    home = Path.home()
++    if platform == Platform.MACOS:
++        return [Path("/Applications/Claude.app"), home / "Applications" / "Claude.app"]
++    if platform == Platform.WINDOWS:
++        local = os.environ.get("LOCALAPPDATA")
++        base = Path(local) if local else home / "AppData" / "Local"
++        return [base / "AnthropicClaude" / "claude.exe"]
++    return []
++
++
++def find_app(configured: str | None, platform: Platform | None = None) -> Path:
++    """Resolve the Claude Desktop app: the ``desktop.appPath`` setting, else
++    the stock install location for this platform.
++
++    Raises:
++        ConfigError: nothing usable was found, with the setting to fix it.
++    """
++    platform = platform or Platform.detect()
++    if configured:
++        app = Path(os.path.expanduser(configured))
++        if app.exists():
++            return app
++        raise ConfigError(
++            f"desktop.appPath points at {app}, which does not exist; run "
++            "'cswap config set desktop.appPath <path>' with the app's location, "
++            "or 'cswap config unset desktop.appPath' to look in the default place"
++        )
++    for candidate in default_app_candidates(platform):
++        if candidate.exists():
++            return candidate
++    if platform in (Platform.LINUX, Platform.WSL):
++        raise ConfigError(
++            "Claude Desktop has no official Linux build; point "
++            "'cswap config set desktop.appPath <path>' at an Electron build "
++            "of the app to open it per account"
++        )
++    looked = ", ".join(str(c) for c in default_app_candidates(platform)) or "nowhere"
++    raise ConfigError(
++        f"Claude Desktop not found (looked in {looked}); install it, or run "
++        "'cswap config set desktop.appPath <path>' with its location"
++    )
++
++
++def _user_data_arg(data_dir: Path) -> str:
++    return f"{USER_DATA_FLAG}={data_dir}"
++
++
++def launch(app: Path, data_dir: Path, platform: Platform | None = None) -> None:
++    """Start a new Claude Desktop instance bound to ``data_dir``, detached.
++
++    macOS goes through ``open -n`` so LaunchServices owns the process: a
++    direct binary launch stays a child of this terminal, steals focus, and
++    dies with the shell. Elsewhere the executable is started in its own
++    session with every standard stream closed.
++
++    Raises:
++        SessionError: the launcher reported failure.
++    """
++    platform = platform or Platform.detect()
++    arg = _user_data_arg(data_dir)
++    if platform == Platform.MACOS:
++        proc = subprocess.run(
++            ["open", "-n", "-a", str(app), "--args", arg],
++            capture_output=True, text=True,
++        )
++        if proc.returncode != 0:
++            detail = (proc.stderr or proc.stdout).strip()
++            raise SessionError(
++                f"could not open {app}" + (f": {detail}" if detail else "")
++            )
++        return
++    kwargs: dict = {
++        "stdin": subprocess.DEVNULL,
++        "stdout": subprocess.DEVNULL,
++        "stderr": subprocess.DEVNULL,
++        "close_fds": True,
++    }
++    if sys.platform == "win32":
++        kwargs["creationflags"] = (
++            subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
++        )
++    else:
++        kwargs["start_new_session"] = True
++    try:
++        subprocess.Popen([str(app), arg], **kwargs)
++    except OSError as exc:
++        raise SessionError(f"could not start {app}: {exc}") from exc
++
++
++def activate(app: Path, platform: Platform | None = None) -> None:
++    """Bring Claude Desktop to the front without starting another copy.
++
++    Best effort, macOS only: ``open`` without ``-n`` activates the running
++    app. With several instances open, LaunchServices picks one; the user
++    reaches the others through Mission Control or Cmd-backtick.
++    """
++    platform = platform or Platform.detect()
++    if platform != Platform.MACOS:
++        return
++    try:
++        subprocess.run(["open", "-a", str(app)], capture_output=True, timeout=10)
++    except (OSError, subprocess.TimeoutExpired):
++        pass
++
++
++def running_pids(data_dir: Path, platform: Platform | None = None) -> list[int]:
++    """PIDs of the Claude processes bound to exactly ``data_dir``.
++
++    Matches the whole ``--user-data-dir=<dir>`` token, terminated by
++    whitespace or the end of the command line, so ``2-a`` never matches
++    ``2-ab``; helpers inherit the flag, so one window is several PIDs.
++    Empty on every failure: not knowing reads as "not running", which only
++    ever costs a second window, never a lost one.
++    """
++    platform = platform or Platform.detect()
++    needle = _user_data_arg(data_dir)
++    me = os.getpid()
++    try:
++        if platform == Platform.WINDOWS:
++            out = _windows_matching_pids(needle)
++        else:
++            pattern = re.escape(needle) + r"(\s|$)"
++            proc = subprocess.run(
++                ["pgrep", "-f", pattern],
++                capture_output=True, text=True, timeout=10,
++            )
++            out = proc.stdout
++    except (OSError, subprocess.TimeoutExpired):
++        return []
++    pids = []
++    for token in out.split():
++        try:
++            pid = int(token)
++        except ValueError:
++            continue
++        if pid != me:
++            pids.append(pid)
++    return pids
++
++
++def _windows_matching_pids(needle: str) -> str:
++    """PIDs whose command line contains ``needle``, one per line, via CIM."""
++    literal = needle.replace("'", "''")
++    script = (
++        "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -ne $null "
++        f"-and $_.CommandLine.Contains('{literal}') }} "
++        "| ForEach-Object { $_.ProcessId }"
++    )
++    proc = subprocess.run(
++        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
++        capture_output=True, text=True, timeout=20,
++    )
++    return proc.stdout
++
++
++def quit_instance(
++    data_dir: Path, timeout: float = QUIT_TIMEOUT_S, platform: Platform | None = None
++) -> bool:
++    """Ask the account's window to quit, then force it once ``timeout`` passes.
++
++    Returns True when something was running.
++    """
++    platform = platform or Platform.detect()
++    pids = running_pids(data_dir, platform)
++    if not pids:
++        return False
++    _signal(pids, force=False, platform=platform)
++    deadline = time.monotonic() + timeout
++    while running_pids(data_dir, platform):
++        if time.monotonic() >= deadline:
++            _signal(running_pids(data_dir, platform), force=True, platform=platform)
++            break
++        time.sleep(0.2)
++    return True
++
++
++def _signal(pids: list[int], *, force: bool, platform: Platform) -> None:
++    for pid in pids:
++        try:
++            if platform == Platform.WINDOWS:
++                cmd = ["taskkill", "/PID", str(pid), "/T"] + (["/F"] if force else [])
++                subprocess.run(cmd, capture_output=True, timeout=10)
++            else:
++                import signal
++
++                os.kill(pid, signal.SIGKILL if force else signal.SIGTERM)
++        except (OSError, subprocess.TimeoutExpired):
++            pass
++
++
++@dataclass(frozen=True)
++class DesktopProfile:
++    """One account's Claude Desktop profile as ``cswap desktop`` lists it."""
++
++    number: str
++    email: str
++    alias: str
++    data_dir: Path
++    exists: bool  # opened at least once
++    pids: tuple[int, ...]
++
++    @property
++    def running(self) -> bool:
++        return bool(self.pids)
++
++
++class DesktopManager:
++    """Opens, lists and quits per-account Claude Desktop windows."""
++
++    def __init__(self, switcher: ClaudeAccountSwitcher):
++        self.switcher = switcher
++        self.platform = switcher.platform
++        self._app: Path | None = None
++
++    # -- resolution --------------------------------------------------------
++
++    def data_dir(self, account_num: str, email: str) -> Path:
++        return desktop_dir_for(self.switcher.backup_dir, account_num, email)
++
++    def app(self) -> Path:
++        if self._app is None:
++            from claude_swap.settings import load_desktop_settings
++
++            configured = load_desktop_settings(self.switcher.backup_dir).app_path
++            self._app = find_app(configured, self.platform)
++        return self._app
++
++    def profiles(self) -> list[DesktopProfile]:
++        """Every stored account with its profile state, in slot order."""
++        data = self.switcher._get_sequence_data() or {}
++        accounts = data.get("accounts", {})
++        rows = []
++        for number in sorted(accounts, key=lambda n: int(n) if n.isdigit() else 0):
++            record = accounts[number]
++            email = record.get("email", "")
++            data_dir = self.data_dir(number, email)
++            rows.append(DesktopProfile(
++                number=number,
++                email=email,
++                alias=record.get("alias", "") or "",
++                data_dir=data_dir,
++                exists=data_dir.is_dir(),
++                pids=tuple(running_pids(data_dir, self.platform)),
++            ))
++        return rows
++
++    def _targets(self, identifiers: list[str], all_accounts: bool) -> list[tuple[str, str]]:
++        """(number, email) per requested account; unknown ones are reported
++        and skipped so the rest still open."""
++        if all_accounts:
++            return [(p.number, p.email) for p in self.profiles()]
++        targets = []
++        for ident in identifiers:
++            try:
++                number, email, _ = self.switcher.resolve_account(ident)
++            except AccountNotFoundError:
++                error(f"  {ident}: account not found")
++                targets.append(None)
++                continue
++            targets.append((number, email))
++        return targets
++
++    # -- commands ----------------------------------------------------------
++
++    def open(self, identifiers: list[str], all_accounts: bool = False) -> int:
++        """Open (or bring forward) the windows of the given accounts.
++
++        Returns 1 when any requested account could not be opened.
++        """
++        targets = self._targets(identifiers, all_accounts)
++        if not targets:
++            print(muted("No accounts stored yet; add one with 'cswap add'."))
++            return 0
++        app = self.app()
++        failed = any(t is None for t in targets)
++        for target in targets:
++            if target is None:
++                continue
++            number, email = target
++            data_dir = self.data_dir(number, email)
++            label = f"{number}. {email}"
++            if running_pids(data_dir, self.platform):
++                activate(app, self.platform)
++                print(f"  {label} {dimmed('already open, brought to the front')}")
++                continue
++            first_time = not data_dir.is_dir()
++            self._mkdir_private(data_dir)
++            try:
++                launch(app, data_dir, self.platform)
++            except SessionError as exc:
++                error(f"  {label}: {exc}")
++                failed = True
++                continue
++            if first_time:
++                print(
++                    f"  {label} {accent('opening a fresh window')}; sign in to "
++                    "this account there, once. It stays signed in."
++                )
++            else:
++                print(f"  {label} {accent('opening')}")
++        return 1 if failed else 0
++
++    def quit(self, identifiers: list[str], all_accounts: bool = False) -> int:
++        """Close the given accounts' windows. Returns 1 for an unknown account."""
++        targets = self._targets(identifiers, all_accounts)
++        failed = any(t is None for t in targets)
++        for target in targets:
++            if target is None:
++                continue
++            number, email = target
++            if quit_instance(self.data_dir(number, email), platform=self.platform):
++                print(f"  {number}. {email} {accent('closed')}")
++            else:
++                print(f"  {number}. {email} {dimmed('not open')}")
++        return 1 if failed else 0
++
++    def show(self) -> None:
++        """List every account's profile: open, signed in once, or never opened."""
++        rows = self.profiles()
++        if not rows:
++            print(muted("No accounts stored yet; add one with 'cswap add'."))
++            return
++        print(bold_accent("Claude Desktop profiles:"))
++        for p in rows:
++            marker = bold_accent("●") if p.running else dimmed("○")
++            name = f"{p.number}. {p.email}" + (f" ({p.alias})" if p.alias else "")
++            if p.running:
++                state = accent("open") + dimmed(f"  PID {', '.join(map(str, p.pids))}")
++            elif p.exists:
++                state = muted("closed")
++            else:
++                state = dimmed("never opened")
++            print(f"  {marker} {name}  {state}")
++        print()
++        print(dimmed(
++            "cswap desktop <num|email> opens an account's window; "
++            "--all opens every account; --quit closes them."
++        ))
++
++    # -- lifecycle hooks used by the switcher ------------------------------
++
++    def ensure_closed(self, account_num: str, email: str, action: str) -> None:
++        """Refuse ``action`` while the account's window is open."""
++        pids = running_pids(self.data_dir(account_num, email), self.platform)
++        if pids:
++            raise SessionError(
++                f"Claude Desktop is open for account {account_num} ({email}), "
++                f"PID {', '.join(map(str, pids))}. Close it first "
++                f"('cswap desktop --quit {account_num}'), then retry {action}."
++            )
++
++    def delete_profile(self, account_num: str, email: str) -> None:
++        """Remove the account's profile directory; the login goes with it."""
++        data_dir = self.data_dir(account_num, email)
++        if data_dir.exists():
++            shutil.rmtree(data_dir, ignore_errors=True)
++
++    def open_profile_dirs(self) -> dict[str, list[int]]:
++        """``{dir name: pids}`` for every profile with a window open, by
++        scanning ``desktop/`` itself so a profile whose account is gone
++        still counts."""
++        root = self.switcher.backup_dir / DESKTOP_DIRNAME
++        if not root.is_dir():
++            return {}
++        live = {}
++        for d in sorted(root.iterdir()):
++            if not d.is_dir():
++                continue
++            pids = running_pids(d, self.platform)
++            if pids:
++                live[d.name] = pids
++        return live
++
++    @staticmethod
++    def _mkdir_private(path: Path) -> None:
++        path.mkdir(parents=True, exist_ok=True)
++        if sys.platform != "win32":
++            os.chmod(path, 0o700)
++
+diff --git a/src/claude_swap/settings.py b/src/claude_swap/settings.py
+index fd3d0df9f742b20dd021b94a56ffac7e2cd64415..77a5c5dda7e8aa7a3d63579ee06abed76772a245 100644
+--- a/src/claude_swap/settings.py
++++ b/src/claude_swap/settings.py
+@@ -2,8 +2,8 @@
+ 
+ One versioned JSON file for user-tunable claude-swap preferences, written
+ atomically with the backup dir's 0600/0700 modes. v1 carries the
+-``autoswitch``, ``ui`` and ``session`` sections; other sections can be added
+-additively.
++``autoswitch``, ``ui``, ``session`` and ``desktop`` sections; other sections
++can be added additively.
+ Unknown keys (future fields, other tools' experiments) survive a round trip.
+ 
+ Reading is forgiving — a missing or corrupt file yields defaults with a logged
+@@ -85,10 +85,22 @@ class SessionSettings:
+     share_history: bool = True
+ 
+ 
++@dataclass(frozen=True)
++class DesktopSettings:
++    """Claude Desktop preferences (``desktop`` section).
++
++    ``app_path`` names the Claude Desktop app ``cswap desktop`` opens per
++    account; unset, the stock install location for the platform is used.
++    """
++
++    app_path: str | None = None
++
++
+ _SECTION_DEFAULT_SOURCES = {
+     "autoswitch": AutoSwitchSettings,
+     "ui": UiSettings,
+     "session": SessionSettings,
++    "desktop": DesktopSettings,
+ }
+ 
+ 
+@@ -165,6 +177,10 @@ SETTING_SPECS: dict[str, SettingSpec] = {
+             "session", "shareHistory", "share_history", "bool",
+             help="cswap run shares one conversation history across accounts",
+         ),
++        SettingSpec(
++            "desktop", "appPath", "app_path", "string",
++            help="Claude Desktop app that cswap desktop opens (default: the stock install)",
++        ),
+     )
+ }
+ 
+@@ -292,6 +308,23 @@ def load_session_settings(backup_root: Path) -> SessionSettings:
+     return SessionSettings(share_history=share_history)
+ 
+ 
++def load_desktop_settings(backup_root: Path) -> DesktopSettings:
++    """Load the desktop section; missing/corrupt file or bad type → default."""
++    raw = _read_raw(settings_path(backup_root))
++    section = raw.get("desktop")
++    default = DesktopSettings()
++    if not isinstance(section, dict):
++        return default
++    app_path = section.get("appPath", default.app_path)
++    if app_path is not None and not isinstance(app_path, str):
++        _logger.warning(
++            "settings.json: desktop.appPath must be a string, got %r; ignoring",
++            app_path,
++        )
++        return default
++    return DesktopSettings(app_path=app_path or None)
++
++
+ def save_settings(backup_root: Path, settings: AutoSwitchSettings) -> None:
+     """Write the autoswitch section, preserving unknown keys and sections."""
+     path = settings_path(backup_root)
+@@ -457,6 +490,7 @@ def effective_settings(backup_root: Path) -> list[tuple[SettingSpec, object, boo
+         "autoswitch": load_settings(backup_root),
+         "ui": load_ui_settings(backup_root),
+         "session": load_session_settings(backup_root),
++        "desktop": load_desktop_settings(backup_root),
+     }
+     rows = []
+     for spec in SETTING_SPECS.values():
+diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
+index a51adda7d31409da587101089e5b60a153d5c776..17c0fd2aacdb601365af39a7ccbaf8d90dbe6850 100644
+--- a/src/claude_swap/switcher.py
++++ b/src/claude_swap/switcher.py
+@@ -952,11 +952,20 @@ class ClaudeAccountSwitcher:
+             SessionError: a live session-mode instance is using this account.
+         """
+         self._ensure_no_live_session(account_num, email, "the operation")
++        desktop = self._desktop_manager()
++        desktop.ensure_closed(account_num, email, "the operation")
+         self._delete_account_credentials(account_num, email)
+         config_file = self.configs_dir / f".claude-config-{account_num}-{email}.json"
+         if config_file.exists():
+             config_file.unlink()
+         self._delete_session_profile(account_num, email)
++        desktop.delete_profile(account_num, email)
++
++    def _desktop_manager(self):
++        """The account's Claude Desktop windows and profiles (see desktop.py)."""
++        from claude_swap.desktop import DesktopManager
++
++        return DesktopManager(self)
+ 
+     def _prune_mappings(self, email: str, org_uuid: str) -> None:
+         """Drop directory mappings for an identity that no longer has a slot.
+@@ -7692,6 +7701,24 @@ class ClaudeAccountSwitcher:
+                 "would pull a live profile out from under it. Repair or remove "
+                 "them, then retry --purge."
+             )
++        # Same for Claude Desktop windows: their profile is the login.
++        desktop_live = self._desktop_manager().open_profile_dirs()
++        if desktop_live:
++            details = "; ".join(
++                f"{name} (PID {', '.join(map(str, pids))})"
++                for name, pids in desktop_live.items()
++            )
++            raise SessionError(
++                f"Claude Desktop window(s) open on a cswap profile: {details}. "
++                "Close them first ('cswap desktop --quit --all'), then retry "
++                "--purge."
++            )
++        desktop_root = self.backup_dir / "desktop"
++        desktop_profiles = (
++            [d.name for d in desktop_root.iterdir() if d.is_dir()]
++            if desktop_root.is_dir()
++            else []
++        )
+ 
+         warning("This will remove ALL claude-swap data from your system:")
+         print(f"  - Backup directory: {self.backup_dir}")
+@@ -7708,6 +7735,8 @@ class ClaudeAccountSwitcher:
+             print("  - All stored account credential files")
+         if session_dirs:
+             print("  - All session profiles and their Keychain entries")
++        if desktop_profiles:
++            print("  - All Claude Desktop profiles (each account's desktop login)")
+         print()
+         print(dimmed("Note: This does NOT affect your current Claude Code login."))
+         print()
+@@ -7767,6 +7796,10 @@ class ClaudeAccountSwitcher:
+             removed_items.append(
+                 f"Session profiles: {', '.join(d.name for d in session_dirs)}"
+             )
++        if desktop_profiles:
++            removed_items.append(
++                f"Claude Desktop profiles: {', '.join(desktop_profiles)}"
++            )
+ 
+         # Remove backup directory
+         if self.backup_dir.exists():
+diff --git a/tests/test_config_cli.py b/tests/test_config_cli.py
+index 60d81f8758b742402a3cf4629235b784c372f585..db9c454721df80bb4d16d199090884bea5655f05 100644
+--- a/tests/test_config_cli.py
++++ b/tests/test_config_cli.py
+@@ -50,9 +50,10 @@ class TestConfigList:
+             "autoswitch.model",
+             "ui.theme",
+             "session.shareHistory",
++            "desktop.appPath",
+         ):
+             assert key in out
+-        assert out.count("(default)") == 10
++        assert out.count("(default)") == 11
+ 
+     def test_set_key_not_marked_default(self, temp_home, capsys):
+         _run(["set", "autoswitch.cooldownSeconds", "600"], capsys)
+@@ -79,7 +80,7 @@ class TestConfigList:
+         assert payload["schemaVersion"] == 1
+         assert payload["path"].endswith("settings.json")
+         by_key = {entry["key"]: entry for entry in payload["settings"]}
+-        assert len(by_key) == 10
++        assert len(by_key) == 11
+         assert by_key["session.shareHistory"]["value"] is True
+         assert by_key["autoswitch.threshold"]["value"] == 90.0
+         assert by_key["autoswitch.threshold"]["isSet"] is False
+diff --git a/tests/test_desktop.py b/tests/test_desktop.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..9ae647f988783a4656ca7710014f21e050131b8a
+--- /dev/null
++++ b/tests/test_desktop.py
+@@ -0,0 +1,418 @@
++"""``cswap desktop``: Claude Desktop, one window per stored account.
++
++Claude Desktop keeps one login per profile, and Electron honors
++``--user-data-dir``, so each account gets a permanent profile under
++``<backup>/desktop/`` and the app is opened against it. The window is
++found again by the exact ``--user-data-dir=<dir>`` token on its command
++line. Nothing copies a login: the user signs in once per profile.
++"""
++
++from __future__ import annotations
++
++import json
++import re
++import subprocess
++import sys
++from pathlib import Path
++from unittest.mock import MagicMock, patch
++
++import pytest
++
++from claude_swap import cli, desktop
++from claude_swap.desktop import DesktopManager, desktop_dir_for, find_app
++from claude_swap.exceptions import ConfigError, SessionError
++from claude_swap.models import Platform
++from claude_swap.settings import (
++    load_desktop_settings,
++    set_setting,
++    settings_path,
++    unset_setting,
++)
++from claude_swap.switcher import ClaudeAccountSwitcher
++
++
++def _plain(text: str) -> str:
++    return re.sub(r"\x1b\[[0-9;]*m", "", text)
++
++
++@pytest.fixture
++def switcher(temp_home, sample_sequence_data):
++    sw = ClaudeAccountSwitcher()
++    sw._setup_directories()
++    sw._write_json(sw.sequence_file, sample_sequence_data)
++    return sw
++
++
++@pytest.fixture
++def app(tmp_path):
++    bundle = tmp_path / "Claude.app"
++    bundle.mkdir()
++    return bundle
++
++
++@pytest.fixture
++def manager(switcher, app):
++    """A manager on macOS with the app found and no window open unless a
++    test says so."""
++    m = DesktopManager(switcher)
++    m.platform = Platform.MACOS
++    m._app = app
++    return m
++
++
++class TestLayout:
++    def test_profile_sits_beside_session_profiles(self, tmp_path):
++        d = desktop_dir_for(tmp_path, "2", "user@x.com")
++        assert d == tmp_path / "desktop" / "2-user_x.com"
++
++    def test_windows_forbidden_chars_are_replaced(self, tmp_path):
++        d = desktop_dir_for(tmp_path, "1", 'a<b>:"|?*@x.com')
++        assert not set('<>:"|?*') & set(d.name)
++
++
++class TestFindApp:
++    def test_setting_wins_over_the_stock_location(self, tmp_path):
++        custom = tmp_path / "Elsewhere" / "Claude.app"
++        custom.mkdir(parents=True)
++        assert find_app(str(custom), Platform.MACOS) == custom
++
++    def test_setting_that_points_nowhere_names_the_fix(self, tmp_path):
++        with pytest.raises(ConfigError, match="desktop.appPath points at .*unset"):
++            find_app(str(tmp_path / "missing.app"), Platform.MACOS)
++
++    def test_stock_location_is_found(self, tmp_path):
++        stock = tmp_path / "Applications" / "Claude.app"
++        stock.mkdir(parents=True)
++        with patch.object(desktop, "default_app_candidates", return_value=[stock]):
++            assert find_app(None, Platform.MACOS) == stock
++
++    def test_missing_install_says_where_it_looked(self, tmp_path):
++        with patch.object(
++            desktop, "default_app_candidates", return_value=[tmp_path / "nope.app"]
++        ):
++            with pytest.raises(ConfigError, match="not found .*nope.app"):
++                find_app(None, Platform.MACOS)
++
++    def test_linux_has_no_stock_app(self):
++        with pytest.raises(ConfigError, match="no official Linux build"):
++            find_app(None, Platform.LINUX)
++
++    def test_windows_candidate_follows_localappdata(self, tmp_path, monkeypatch):
++        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
++        assert desktop.default_app_candidates(Platform.WINDOWS) == [
++            tmp_path / "AnthropicClaude" / "claude.exe"
++        ]
++
++
++class TestLaunch:
++    def test_macos_hands_the_profile_to_open(self, tmp_path):
++        """``open -n`` so LaunchServices, not this terminal, owns the app;
++        ``--args`` carries the profile dir through to Electron."""
++        data_dir = tmp_path / "2-x"
++        with patch.object(desktop.subprocess, "run") as run:
++            run.return_value = MagicMock(returncode=0)
++            desktop.launch(Path("/Applications/Claude.app"), data_dir, Platform.MACOS)
++        assert run.call_args.args[0] == [
++            "open", "-n", "-a", "/Applications/Claude.app",
++            "--args", f"--user-data-dir={data_dir}",
++        ]
++
++    def test_macos_open_failure_is_an_error(self, tmp_path):
++        with patch.object(desktop.subprocess, "run") as run:
++            run.return_value = MagicMock(returncode=1, stderr="Unable to find", stdout="")
++            with pytest.raises(SessionError, match="could not open .*Unable to find"):
++                desktop.launch(Path("/x/Claude.app"), tmp_path, Platform.MACOS)
++
++    def test_other_platforms_start_the_binary_detached(self, tmp_path):
++        exe = tmp_path / "claude"
++        with patch.object(desktop.subprocess, "Popen") as popen:
++            desktop.launch(exe, tmp_path / "p", Platform.LINUX)
++        args, kwargs = popen.call_args
++        assert args[0] == [str(exe), f"--user-data-dir={tmp_path / 'p'}"]
++        assert kwargs["stdin"] is subprocess.DEVNULL
++        assert kwargs["stdout"] is subprocess.DEVNULL
++        if sys.platform != "win32":
++            assert kwargs["start_new_session"] is True
++
++    def test_activate_reuses_the_running_app(self):
++        with patch.object(desktop.subprocess, "run") as run:
++            desktop.activate(Path("/Applications/Claude.app"), Platform.MACOS)
++        assert run.call_args.args[0] == ["open", "-a", "/Applications/Claude.app"]
++
++    def test_activate_is_a_noop_elsewhere(self):
++        with patch.object(desktop.subprocess, "run") as run:
++            desktop.activate(Path("/x"), Platform.LINUX)
++        run.assert_not_called()
++
++
++class TestRunningPids:
++    def test_matches_the_whole_token_and_drops_itself(self, tmp_path):
++        data_dir = tmp_path / "2-a"
++        with patch.object(desktop.subprocess, "run") as run, \
++             patch.object(desktop.os, "getpid", return_value=77):
++            run.return_value = MagicMock(stdout="77\n101\n102\nnoise\n")
++            pids = desktop.running_pids(data_dir, Platform.MACOS)
++        assert pids == [101, 102]
++        pattern = run.call_args.args[0][2]
++        assert re.search(pattern, f"/x/Claude --user-data-dir={data_dir}")
++        assert re.search(pattern, f"Claude --user-data-dir={data_dir} --type=renderer")
++        assert not re.search(pattern, f"Claude --user-data-dir={data_dir}b")
++
++    def test_unknowable_reads_as_not_running(self, tmp_path):
++        with patch.object(desktop.subprocess, "run", side_effect=OSError("no pgrep")):
++            assert desktop.running_pids(tmp_path, Platform.LINUX) == []
++
++    def test_windows_asks_cim_for_the_command_line(self, tmp_path):
++        with patch.object(desktop.subprocess, "run") as run:
++            run.return_value = MagicMock(stdout="4242\r\n")
++            assert desktop.running_pids(tmp_path / "1-a", Platform.WINDOWS) == [4242]
++        argv = run.call_args.args[0]
++        assert argv[0] == "powershell"
++        assert f"--user-data-dir={tmp_path / '1-a'}" in argv[-1]
++
++
++class TestQuit:
++    def test_nothing_running_is_a_noop(self, tmp_path):
++        with patch.object(desktop, "running_pids", return_value=[]), \
++             patch.object(desktop, "_signal") as sig:
++            assert desktop.quit_instance(tmp_path, platform=Platform.MACOS) is False
++        sig.assert_not_called()
++
++    def test_term_then_kill_after_the_timeout(self, tmp_path):
++        clock = iter([0.0, 0.1, 10.0, 10.0])
++        with patch.object(desktop, "running_pids", return_value=[5]), \
++             patch.object(desktop, "_signal") as sig, \
++             patch.object(desktop.time, "monotonic", side_effect=clock), \
++             patch.object(desktop.time, "sleep"):
++            assert desktop.quit_instance(tmp_path, timeout=5, platform=Platform.MACOS)
++        forces = [c.kwargs["force"] for c in sig.call_args_list]
++        assert forces == [False, True]
++
++    def test_term_alone_when_the_window_leaves(self, tmp_path):
++        with patch.object(desktop, "running_pids", side_effect=[[5], []]), \
++             patch.object(desktop, "_signal") as sig:
++            assert desktop.quit_instance(tmp_path, platform=Platform.MACOS)
++        assert [c.kwargs["force"] for c in sig.call_args_list] == [False]
++
++
++class TestManager:
++    def test_first_open_creates_a_private_profile_and_says_to_sign_in(
++        self, manager, app, capsys
++    ):
++        with patch.object(desktop, "running_pids", return_value=[]), \
++             patch.object(desktop, "launch") as launch:
++            assert manager.open(["2"]) == 0
++        data_dir = manager.data_dir("2", "account2@example.com")
++        launch.assert_called_once_with(app, data_dir, Platform.MACOS)
++        assert data_dir.is_dir()
++        if sys.platform != "win32":
++            assert data_dir.stat().st_mode & 0o777 == 0o700
++        out = _plain(capsys.readouterr().out)
++        assert "2. account2@example.com" in out and "sign in" in out
++
++    def test_second_open_of_a_profile_does_not_repeat_the_sign_in_hint(
++        self, manager, capsys
++    ):
++        manager.data_dir("1", "account1@example.com").mkdir(parents=True)
++        with patch.object(desktop, "running_pids", return_value=[]), \
++             patch.object(desktop, "launch"):
++            assert manager.open(["account1@example.com"]) == 0
++        out = _plain(capsys.readouterr().out)
++        assert "opening" in out and "sign in" not in out
++
++    def test_open_window_is_brought_forward_not_duplicated(self, manager, app, capsys):
++        with patch.object(desktop, "running_pids", return_value=[9]), \
++             patch.object(desktop, "launch") as launch, \
++             patch.object(desktop, "activate") as activate:
++            assert manager.open(["1"]) == 0
++        launch.assert_not_called()
++        activate.assert_called_once_with(app, Platform.MACOS)
++        assert "already open" in _plain(capsys.readouterr().out)
++
++    def test_all_opens_every_account_once(self, manager):
++        with patch.object(desktop, "running_pids", return_value=[]), \
++             patch.object(desktop, "launch") as launch:
++            assert manager.open([], all_accounts=True) == 0
++        dirs = [c.args[1].name for c in launch.call_args_list]
++        assert dirs == ["1-account1_example.com", "2-account2_example.com"]
++
++    def test_unknown_account_fails_without_blocking_the_rest(self, manager, capsys):
++        with patch.object(desktop, "running_pids", return_value=[]), \
++             patch.object(desktop, "launch") as launch:
++            assert manager.open(["nobody@example.com", "2"]) == 1
++        assert launch.call_count == 1
++        assert "nobody@example.com: account not found" in _plain(
++            capsys.readouterr().err
++        )
++
++    def test_launch_failure_is_reported_per_account(self, manager, capsys):
++        with patch.object(desktop, "running_pids", return_value=[]), \
++             patch.object(desktop, "launch", side_effect=SessionError("could not open")):
++            assert manager.open(["1"]) == 1
++        assert "1. account1@example.com: could not open" in _plain(
++            capsys.readouterr().err
++        )
++
++    def test_app_is_resolved_from_settings(self, switcher, tmp_path):
++        custom = tmp_path / "Custom.app"
++        custom.mkdir()
++        set_setting(switcher.backup_dir, "desktop.appPath", str(custom))
++        m = DesktopManager(switcher)
++        m.platform = Platform.MACOS
++        assert m.app() == custom
++
++    def test_missing_app_is_a_config_error_before_any_launch(self, switcher):
++        m = DesktopManager(switcher)
++        m.platform = Platform.LINUX
++        with patch.object(desktop, "launch") as launch:
++            with pytest.raises(ConfigError):
++                m.open(["1"])
++        launch.assert_not_called()
++
++    def test_quit_reports_closed_and_not_open(self, manager, capsys):
++        with patch.object(desktop, "quit_instance", side_effect=[True, False]):
++            assert manager.quit(["1", "2"]) == 0
++        out = _plain(capsys.readouterr().out)
++        assert "1. account1@example.com closed" in out
++        assert "2. account2@example.com not open" in out
++
++    def test_show_lists_open_closed_and_never_opened(self, manager, capsys):
++        manager.data_dir("2", "account2@example.com").mkdir(parents=True)
++        with patch.object(
++            desktop, "running_pids",
++            side_effect=lambda d, p=None: [31] if d.name.startswith("1-") else [],
++        ):
++            manager.show()
++        out = _plain(capsys.readouterr().out)
++        assert re.search(r"1\. account1@example.com\s+open\s+PID 31", out)
++        assert re.search(r"2\. account2@example.com\s+closed", out)
++
++    def test_show_with_no_accounts(self, temp_home, capsys):
++        sw = ClaudeAccountSwitcher()
++        sw._setup_directories()
++        DesktopManager(sw).show()
++        assert "No accounts stored yet" in _plain(capsys.readouterr().out)
++
++
++class TestLifecycle:
++    def test_remove_refuses_while_the_window_is_open(self, switcher, monkeypatch):
++        with patch.object(desktop, "running_pids", return_value=[12]), \
++             patch.object(switcher, "_ensure_no_live_session"), \
++             patch.object(switcher, "_delete_account_credentials") as creds:
++            with pytest.raises(SessionError, match="Claude Desktop is open .*--quit 2"):
++                switcher._delete_account_files("2", "account2@example.com")
++        creds.assert_not_called()
++
++    def test_remove_takes_the_desktop_profile_with_the_account(self, switcher):
++        profile = desktop_dir_for(switcher.backup_dir, "2", "account2@example.com")
++        profile.mkdir(parents=True)
++        (profile / "Cookies").write_text("session")
++        with patch.object(desktop, "running_pids", return_value=[]), \
++             patch.object(switcher, "_ensure_no_live_session"), \
++             patch.object(switcher, "_delete_account_credentials"):
++            switcher._delete_account_files("2", "account2@example.com")
++        assert not profile.exists()
++
++    def test_purge_refuses_while_a_window_is_open(self, switcher):
++        profile = desktop_dir_for(switcher.backup_dir, "1", "account1@example.com")
++        profile.mkdir(parents=True)
++        with patch.object(desktop, "running_pids", return_value=[8]), \
++             patch("builtins.input") as ask:
++            with pytest.raises(SessionError, match="Claude Desktop window.*--quit --all"):
++                switcher.purge()
++        ask.assert_not_called()
++
++    def test_purge_lists_and_removes_desktop_profiles(self, switcher, capsys):
++        profile = desktop_dir_for(switcher.backup_dir, "1", "account1@example.com")
++        profile.mkdir(parents=True)
++        with patch.object(desktop, "running_pids", return_value=[]), \
++             patch("builtins.input", return_value="y"):
++            switcher.purge()
++        out = _plain(capsys.readouterr().out)
++        assert "All Claude Desktop profiles" in out
++        assert "Claude Desktop profiles: 1-account1_example.com" in out
++        assert not profile.exists()
++
++
++class TestSettings:
++    def test_default_is_unset(self, tmp_path):
++        assert load_desktop_settings(tmp_path).app_path is None
++
++    def test_round_trip_through_config_set(self, tmp_path):
++        assert set_setting(tmp_path, "desktop.appPath", "~/Apps/Claude.app") == (
++            "~/Apps/Claude.app"
++        )
++        raw = json.loads(settings_path(tmp_path).read_text())
++        assert raw["desktop"]["appPath"] == "~/Apps/Claude.app"
++        assert load_desktop_settings(tmp_path).app_path == "~/Apps/Claude.app"
++        assert unset_setting(tmp_path, "desktop.appPath") is True
++        assert load_desktop_settings(tmp_path).app_path is None
++
++    def test_wrong_type_is_ignored(self, tmp_path):
++        settings_path(tmp_path).write_text(json.dumps({"desktop": {"appPath": 3}}))
++        assert load_desktop_settings(tmp_path).app_path is None
++
++    def test_empty_value_is_refused(self, tmp_path):
++        with pytest.raises(ConfigError, match="non-empty"):
++            set_setting(tmp_path, "desktop.appPath", "  ")
++
++
++class TestCli:
++    def test_dispatched_from_main(self, temp_home):
++        with patch("claude_swap.cli._desktop_command") as fn, \
++             patch.object(sys, "argv", ["claude-swap", "desktop", "2"]):
++            cli.main()
++        fn.assert_called_once_with(["2"])
++
++    def test_accounts_open_and_exit_code_follows_the_manager(self, temp_home):
++        with patch("claude_swap.cli.ClaudeAccountSwitcher"), \
++             patch("claude_swap.cli._guard_root"), \
++             patch("claude_swap.desktop.DesktopManager") as cls:
++            cls.return_value.open.return_value = 1
++            with pytest.raises(SystemExit) as exc:
++                cli._desktop_command(["1", "work"])
++        assert exc.value.code == 1
++        cls.return_value.open.assert_called_once_with(["1", "work"], False)
++
++    def test_all_and_quit_route_to_the_manager(self, temp_home):
++        with patch("claude_swap.cli.ClaudeAccountSwitcher"), \
++             patch("claude_swap.cli._guard_root"), \
++             patch("claude_swap.desktop.DesktopManager") as cls:
++            cls.return_value.open.return_value = 0
++            cls.return_value.quit.return_value = 0
++            cli._desktop_command(["--all"])
++            cli._desktop_command(["--quit", "2"])
++        cls.return_value.open.assert_called_once_with([], True)
++        cls.return_value.quit.assert_called_once_with(["2"], False)
++
++    def test_bare_desktop_lists(self, temp_home):
++        with patch("claude_swap.cli.ClaudeAccountSwitcher"), \
++             patch("claude_swap.cli._guard_root"), \
++             patch("claude_swap.desktop.DesktopManager") as cls:
++            cli._desktop_command([])
++        cls.return_value.show.assert_called_once_with()
++        cls.return_value.open.assert_not_called()
++
++    def test_quit_without_a_target_is_a_usage_error(self, temp_home, capsys):
++        with pytest.raises(SystemExit) as exc:
++            cli._desktop_command(["--quit"])
++        assert exc.value.code == 2
++        assert "--quit needs an account or --all" in capsys.readouterr().err
++
++    def test_config_error_exits_one(self, temp_home, capsys):
++        with patch("claude_swap.cli.ClaudeAccountSwitcher"), \
++             patch("claude_swap.cli._guard_root"), \
++             patch("claude_swap.desktop.DesktopManager") as cls:
++            cls.return_value.open.side_effect = ConfigError("Claude Desktop not found")
++            with pytest.raises(SystemExit) as exc:
++                cli._desktop_command(["1"])
++        assert exc.value.code == 1
++        assert "Claude Desktop not found" in _plain(capsys.readouterr().err)
++
++    def test_listed_in_help(self, temp_home, capsys):
++        with patch.object(sys, "argv", ["claude-swap", "--help"]), \
++             pytest.raises(SystemExit):
++            cli.main()
++        out = capsys.readouterr().out
++        assert "desktop <num|email ...>" in out
++        assert "desktop --quit <num|email>" in out
+diff --git a/tests/test_settings.py b/tests/test_settings.py
+index f72e30a7a86dc39d91e7df1f0c7bb8787cf6c2e9..2a99394215784c76c2090210b1e9c1a64c1873e8 100644
+--- a/tests/test_settings.py
++++ b/tests/test_settings.py
+@@ -15,6 +15,7 @@ from claude_swap.settings import (
+     SETTING_SPECS,
+     atomic_write_json,
+     AutoSwitchSettings,
++    DesktopSettings,
+     SessionSettings,
+     UiSettings,
+     effective_settings,
+@@ -191,12 +192,16 @@ class TestSettingSpecs:
+         assert by_section["session"] == {
+             f.name for f in SessionSettings.__dataclass_fields__.values()
+         }
++        assert by_section["desktop"] == {
++            f.name for f in DesktopSettings.__dataclass_fields__.values()
++        }
+ 
+     def test_defaults_match_dataclass(self):
+         sources = {
+             "autoswitch": AutoSwitchSettings(),
+             "ui": UiSettings(),
+             "session": SessionSettings(),
++            "desktop": DesktopSettings(),
+         }
+         for spec in SETTING_SPECS.values():
+             assert spec.default == getattr(sources[spec.section], spec.field)

@@ -46,6 +46,7 @@ aswap upgrade  # 依安裝方式執行 uv tool upgrade aswap 或 pipx upgrade as
 | [依需求重新整理用量](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)        | 上游只依自己的節奏抓取用量。在 serve TTL、輪詢計畫和失敗後的等待都允許下一次請求之前，所有介面只顯示快取值，也不提示伺服器允許重試的時間。`cswap refresh [帳號 ...]` 立即抓取，各帳號互不影響，並告知被限流的帳號何時可以重試。                                                                                                          |
 | [合併歷史時不丟檔案](../../patches/fix_set_aside_a_differing_history_file_instead_of_dropping_the_profiles_copy.patch)   | `cswap run` 把 profile 自己的歷史併入 `~/.claude` 時，上游把所有同名檔案都當成重複項，不看內容就刪掉 profile 那一份。關閉共享後繼續過的工作階段，或專案裡的 `memory/MEMORY.md`，會悄悄遺失。補丁只在兩份完全相同時才丟棄，內容不同的那份放到 `history-conflicts/` 下保留。                                                               |
 | [共享同一份對話歷史](../../patches/feat_share_one_conversation_history_across_accounts_by_default.patch)                 | 除非每次啟動都帶 `--share-history`，每個帳號各有一份 `projects/`。當該帳號是預設登入時，`cswap run` 會完全跳過 profile。同一帳號的工作階段會散落在兩處，切換預設帳號後 `claude --resume` 就找不到先前的對話 (上游 #239)。補丁把共享設為預設，記在 `session.shareHistory` 設定裡，並在預設登入路徑上也把 profile 的歷史併入 `~/.claude`。 |
+| [依帳號開啟 Claude Desktop](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)     | Claude Desktop 每個 profile 只保留一個登入，想用第二個帳號就得先登出再重新登入，每次皆然。修補給每個已存帳號一個永久的桌面 profile，並以 `--user-data-dir` 啟動應用程式，做法同 [guise](https://github.com/siddhjagani/guise)：`cswap desktop 2` 在獨立視窗開啟帳號 2，登入一次後持續保持登入，其他帳號的視窗可同時開著。                |
 
 每個補丁都是一次提交。提交訊息說明上游的問題。完整清單見 [patches/.patches](../../patches/.patches)。
 
