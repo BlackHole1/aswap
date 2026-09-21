@@ -22,6 +22,18 @@ of duplicating it; `--quit` sends TERM, then KILL after a timeout; a
 bare `cswap desktop` lists which accounts are open. Nothing reads,
 copies or migrates a login: Claude owns everything in the profile.
 
+A separate profile is also a separate copy of the app's own state, and
+the Code tab lists its local sessions from `claude-code-sessions/`
+inside the profile, so a fresh profile shows none of them even though
+the transcripts in `~/.claude/projects` are shared. That directory,
+`local-agent-mode-sessions/` and `spaces-present/` are all keyed by
+account UUID one level down, so `desktop.shareSessions` (default on)
+links the stock profile's copies into every account's profile before
+each launch; a copy the profile accumulated on its own is merged first
+(identical files dropped, differing ones kept under
+`history-conflicts/`), the same way `cswap run` shares history. Not on
+Windows, where a symlink needs a privilege the user may not have.
+
 The app is looked up in the stock install location (`/Applications` or
 `~/Applications` on macOS, `%LOCALAPPDATA%\AnthropicClaude` on Windows)
 or the new `desktop.appPath` setting; Linux has no official build and
@@ -31,10 +43,10 @@ any window is open and lists the profiles it removes, the same way both
 treat session profiles.
 
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index 6557093b52dff125ca65ed421b0d759b03fad6d1..5779a2043d48c8e7ec03c072b297deb47c1c6cf4 100644
+index 6557093b52dff125ca65ed421b0d759b03fad6d1..4bd5417a458917c60cb74cd662ac8a3c0a8c245c 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
-@@ -387,6 +387,82 @@ def _refresh_command(argv: list[str]) -> None:
+@@ -387,6 +387,84 @@ def _refresh_command(argv: list[str]) -> None:
          sys.exit(code)
  
  
@@ -55,9 +67,11 @@ index 6557093b52dff125ca65ed421b0d759b03fad6d1..5779a2043d48c8e7ec03c072b297deb4
 +            "picked by its slot in the account table; the credential cswap "
 +            "stores for Claude Code is not used or copied. The first open "
 +            "shows a sign-in: sign in to that account once, and it stays "
-+            "signed in. Several accounts can be open at once. With no "
-+            "account: list each account's window. Exits 1 if any account "
-+            "could not be opened."
++            "signed in. Several accounts can be open at once. The Code tab's "
++            "local sessions are shared with the stock profile (setting "
++            "desktop.shareSessions; not on Windows). With no account: list "
++            "each account's window. Exits 1 if any account could not be "
++            "opened."
 +        ),
 +        formatter_class=argparse.RawDescriptionHelpFormatter,
 +        epilog="""
@@ -117,7 +131,7 @@ index 6557093b52dff125ca65ed421b0d759b03fad6d1..5779a2043d48c8e7ec03c072b297deb4
  def _unclaimed_command(argv: list[str]) -> None:
      """Handle `cswap unclaimed [--purge ID]` — inspect or drop a stash row.
  
-@@ -1052,6 +1128,9 @@ def main() -> None:
+@@ -1052,6 +1130,9 @@ def main() -> None:
      if argv and argv[0] == "refresh":
          _refresh_command(argv[1:])
          return
@@ -127,7 +141,7 @@ index 6557093b52dff125ca65ed421b0d759b03fad6d1..5779a2043d48c8e7ec03c072b297deb4
      if argv and argv[0] == "alias":
          _alias_command(argv[1:])
          return
-@@ -1092,6 +1171,10 @@ Commands:
+@@ -1092,6 +1173,10 @@ Commands:
    %(prog)s enable <num|email>         return a disabled account to rotation
    %(prog)s run <num|email> [-- ...]   run as an account, this terminal only
    %(prog)s run                        run the current dir's mapped account
@@ -138,7 +152,7 @@ index 6557093b52dff125ca65ed421b0d759b03fad6d1..5779a2043d48c8e7ec03c072b297deb4
    %(prog)s map <num|email> [path]     map a directory to an account
    %(prog)s map                        list directory mappings
    %(prog)s unmap [path]               remove a directory mapping
-@@ -1123,6 +1206,7 @@ Aliases: ls=list  rm=remove  update=upgrade""",
+@@ -1123,6 +1208,7 @@ Aliases: ls=list  rm=remove  update=upgrade""",
    %(prog)s add --slot 3                      # add to a specific slot
    %(prog)s add-token sk-ant-oat01-... --email me@example.com
    %(prog)s run 2 -- --resume                 # forward args after '--' to claude
@@ -148,10 +162,10 @@ index 6557093b52dff125ca65ed421b0d759b03fad6d1..5779a2043d48c8e7ec03c072b297deb4
  
 diff --git a/src/claude_swap/desktop.py b/src/claude_swap/desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..0bac7b0e1413a1de61bfeca521800387e6aca904
+index 0000000000000000000000000000000000000000..b4a86cf7d810907fad192cb5d30279653ebc941b
 --- /dev/null
 +++ b/src/claude_swap/desktop.py
-@@ -0,0 +1,434 @@
+@@ -0,0 +1,543 @@
 +"""Claude Desktop, one window per stored account.
 +
 +Claude Desktop holds one login per profile: to use a second account the
@@ -167,6 +181,15 @@ index 0000000000000000000000000000000000000000..0bac7b0e1413a1de61bfeca521800387
 +line carries exactly our ``--user-data-dir=<dir>`` is that account's window.
 +The same approach as https://github.com/siddhjagani/guise, ported to the
 +account table cswap already keeps.
++
++A separate profile also means a separate copy of the app's own state. The
++Code tab lists its local sessions from ``claude-code-sessions/`` inside the
++profile (the transcripts themselves live in ``~/.claude/projects``), so a
++fresh profile shows none of the sessions the stock install already has.
++Those directories are keyed by account UUID one level down, so every
++profile can share the stock install's copies: ``desktop.shareSessions``
++(default on) links them into the profile, merging anything the profile
++accumulated on its own first.
 +"""
 +
 +from __future__ import annotations
@@ -248,6 +271,33 @@ index 0000000000000000000000000000000000000000..0bac7b0e1413a1de61bfeca521800387
 +        f"Claude Desktop not found (looked in {looked}); install it, or run "
 +        "'cswap config set desktop.appPath <path>' with its location"
 +    )
++
++
++def default_user_data_dir(platform: Platform | None = None) -> Path:
++    """The profile the stock app uses when no ``--user-data-dir`` is given
++    (Electron's ``app.getPath("userData")`` for ``Claude``)."""
++    platform = platform or Platform.detect()
++    home = Path.home()
++    if platform == Platform.MACOS:
++        return home / "Library" / "Application Support" / "Claude"
++    if platform == Platform.WINDOWS:
++        appdata = os.environ.get("APPDATA")
++        base = Path(appdata) if appdata else home / "AppData" / "Roaming"
++        return base / "Claude"
++    xdg = Path(os.path.expanduser(os.environ.get("XDG_CONFIG_HOME", "")))
++    base = xdg if str(xdg) != "." and xdg.is_absolute() else home / ".config"
++    return base / "Claude"
++
++
++# State the app keeps per account UUID one level down, so one shared copy
++# serves every profile and each window still only sees its own account:
++# the Code tab's local session index, local agent-mode state (scheduled
++# tasks, rpm) and the Spaces link keys.
++SHARED_STATE_ITEMS: tuple[str, ...] = (
++    "claude-code-sessions",
++    "local-agent-mode-sessions",
++    "spaces-present",
++)
 +
 +
 +def _user_data_arg(data_dir: Path) -> str:
@@ -494,6 +544,7 @@ index 0000000000000000000000000000000000000000..0bac7b0e1413a1de61bfeca521800387
 +                continue
 +            first_time = not data_dir.is_dir()
 +            self._mkdir_private(data_dir)
++            self.sync_shared_state(data_dir)
 +            try:
 +                launch(app, data_dir, self.platform)
 +            except SessionError as exc:
@@ -546,6 +597,78 @@ index 0000000000000000000000000000000000000000..0bac7b0e1413a1de61bfeca521800387
 +            "--all opens every account; --quit closes them."
 +        ))
 +
++    # -- shared state ------------------------------------------------------
++
++    def sync_shared_state(self, data_dir: Path) -> None:
++        """Link (or unlink) the stock profile's per-account state into
++        ``data_dir`` according to ``desktop.shareSessions``.
++
++        Only called while no window uses ``data_dir``: merging moves files
++        out from under a running app. With sharing on, a real directory the
++        profile accumulated is merged into the stock copy first (identical
++        files dropped, differing ones set aside under ``history-conflicts/``,
++        nothing lost), then replaced by a symlink; a symlink elsewhere is
++        repointed. With sharing off, a symlink is removed and the app grows
++        a private directory again. Not on Windows, where a symlink needs a
++        privilege the user may not have; the profile stays private there.
++        """
++        from claude_swap.settings import load_desktop_settings
++
++        share = load_desktop_settings(self.switcher.backup_dir).share_sessions
++        if self.platform == Platform.WINDOWS:
++            return
++        stock = default_user_data_dir(self.platform)
++        for name in SHARED_STATE_ITEMS:
++            dest = data_dir / name
++            src = stock / name
++            if not share:
++                if dest.is_symlink():
++                    dest.unlink()
++                continue
++            if dest.is_symlink():
++                if self._points_at(dest, src):
++                    continue
++                dest.unlink()
++            elif dest.is_dir():
++                conflicts = (
++                    self.switcher.backup_dir / "history-conflicts"
++                    / f"desktop-{data_dir.name}" / time.strftime("%Y%m%dT%H%M%S")
++                )
++                try:
++                    set_aside = self._merge_into(src, dest, conflicts)
++                except OSError as exc:
++                    print(dimmed(
++                        f"  not sharing {name}: merging the profile's copy "
++                        f"failed ({exc})"
++                    ))
++                    continue
++                print(dimmed(f"  merged the profile's {name} into {src}"))
++                if set_aside:
++                    print(dimmed(
++                        f"  {set_aside} file(s) in {name} differed from the "
++                        f"shared copy; kept under {conflicts}"
++                    ))
++            elif dest.exists():
++                dest.unlink()
++            try:
++                self._mkdir_private(src)
++                dest.symlink_to(src, target_is_directory=True)
++            except OSError as exc:
++                print(dimmed(f"  not sharing {name}: {exc}"))
++
++    @staticmethod
++    def _points_at(link: Path, target: Path) -> bool:
++        try:
++            return Path(os.readlink(link)) == target
++        except OSError:
++            return False
++
++    @staticmethod
++    def _merge_into(src: Path, dest: Path, conflicts: Path) -> int:
++        from claude_swap.session import SessionManager
++
++        return SessionManager._merge_history_into_source(src, dest, conflicts)
++
 +    # -- lifecycle hooks used by the switcher ------------------------------
 +
 +    def ensure_closed(self, account_num: str, email: str, action: str) -> None:
@@ -587,7 +710,7 @@ index 0000000000000000000000000000000000000000..0bac7b0e1413a1de61bfeca521800387
 +            os.chmod(path, 0o700)
 +
 diff --git a/src/claude_swap/settings.py b/src/claude_swap/settings.py
-index fd3d0df9f742b20dd021b94a56ffac7e2cd64415..77a5c5dda7e8aa7a3d63579ee06abed76772a245 100644
+index fd3d0df9f742b20dd021b94a56ffac7e2cd64415..b50d4e7dceb6eab636c1621d5126285e0d75aee5 100644
 --- a/src/claude_swap/settings.py
 +++ b/src/claude_swap/settings.py
 @@ -2,8 +2,8 @@
@@ -601,7 +724,7 @@ index fd3d0df9f742b20dd021b94a56ffac7e2cd64415..77a5c5dda7e8aa7a3d63579ee06abed7
  Unknown keys (future fields, other tools' experiments) survive a round trip.
  
  Reading is forgiving — a missing or corrupt file yields defaults with a logged
-@@ -85,10 +85,22 @@ class SessionSettings:
+@@ -85,10 +85,27 @@ class SessionSettings:
      share_history: bool = True
  
  
@@ -611,9 +734,14 @@ index fd3d0df9f742b20dd021b94a56ffac7e2cd64415..77a5c5dda7e8aa7a3d63579ee06abed7
 +
 +    ``app_path`` names the Claude Desktop app ``cswap desktop`` opens per
 +    account; unset, the stock install location for the platform is used.
++    ``share_sessions`` links the app state it keeps per account (the Code
++    tab's local sessions, agent-mode state, Spaces keys) from the stock
++    profile into every account's profile, so a window opened through cswap
++    lists the same local sessions as the stock app. Not on Windows.
 +    """
 +
 +    app_path: str | None = None
++    share_sessions: bool = True
 +
 +
  _SECTION_DEFAULT_SOURCES = {
@@ -624,7 +752,7 @@ index fd3d0df9f742b20dd021b94a56ffac7e2cd64415..77a5c5dda7e8aa7a3d63579ee06abed7
  }
  
  
-@@ -165,6 +177,10 @@ SETTING_SPECS: dict[str, SettingSpec] = {
+@@ -165,6 +182,14 @@ SETTING_SPECS: dict[str, SettingSpec] = {
              "session", "shareHistory", "share_history", "bool",
              help="cswap run shares one conversation history across accounts",
          ),
@@ -632,10 +760,14 @@ index fd3d0df9f742b20dd021b94a56ffac7e2cd64415..77a5c5dda7e8aa7a3d63579ee06abed7
 +            "desktop", "appPath", "app_path", "string",
 +            help="Claude Desktop app that cswap desktop opens (default: the stock install)",
 +        ),
++        SettingSpec(
++            "desktop", "shareSessions", "share_sessions", "bool",
++            help="cswap desktop shares the stock profile's local sessions with every account",
++        ),
      )
  }
  
-@@ -292,6 +308,23 @@ def load_session_settings(backup_root: Path) -> SessionSettings:
+@@ -292,6 +317,31 @@ def load_session_settings(backup_root: Path) -> SessionSettings:
      return SessionSettings(share_history=share_history)
  
  
@@ -652,14 +784,22 @@ index fd3d0df9f742b20dd021b94a56ffac7e2cd64415..77a5c5dda7e8aa7a3d63579ee06abed7
 +            "settings.json: desktop.appPath must be a string, got %r; ignoring",
 +            app_path,
 +        )
-+        return default
-+    return DesktopSettings(app_path=app_path or None)
++        app_path = default.app_path
++    share_sessions = section.get("shareSessions", default.share_sessions)
++    if not isinstance(share_sessions, bool):
++        _logger.warning(
++            "settings.json: desktop.shareSessions must be true or false, got %r; "
++            "using %r",
++            share_sessions, default.share_sessions,
++        )
++        share_sessions = default.share_sessions
++    return DesktopSettings(app_path=app_path or None, share_sessions=share_sessions)
 +
 +
  def save_settings(backup_root: Path, settings: AutoSwitchSettings) -> None:
      """Write the autoswitch section, preserving unknown keys and sections."""
      path = settings_path(backup_root)
-@@ -457,6 +490,7 @@ def effective_settings(backup_root: Path) -> list[tuple[SettingSpec, object, boo
+@@ -457,6 +507,7 @@ def effective_settings(backup_root: Path) -> list[tuple[SettingSpec, object, boo
          "autoswitch": load_settings(backup_root),
          "ui": load_ui_settings(backup_root),
          "session": load_session_settings(backup_root),
@@ -738,36 +878,37 @@ index a51adda7d31409da587101089e5b60a153d5c776..17c0fd2aacdb601365af39a7ccbaf8d9
          # Remove backup directory
          if self.backup_dir.exists():
 diff --git a/tests/test_config_cli.py b/tests/test_config_cli.py
-index 60d81f8758b742402a3cf4629235b784c372f585..db9c454721df80bb4d16d199090884bea5655f05 100644
+index 60d81f8758b742402a3cf4629235b784c372f585..f4f09d414f548b638ad7902323e01fd8edc957e9 100644
 --- a/tests/test_config_cli.py
 +++ b/tests/test_config_cli.py
-@@ -50,9 +50,10 @@ class TestConfigList:
+@@ -50,9 +50,11 @@ class TestConfigList:
              "autoswitch.model",
              "ui.theme",
              "session.shareHistory",
 +            "desktop.appPath",
++            "desktop.shareSessions",
          ):
              assert key in out
 -        assert out.count("(default)") == 10
-+        assert out.count("(default)") == 11
++        assert out.count("(default)") == 12
  
      def test_set_key_not_marked_default(self, temp_home, capsys):
          _run(["set", "autoswitch.cooldownSeconds", "600"], capsys)
-@@ -79,7 +80,7 @@ class TestConfigList:
+@@ -79,7 +81,7 @@ class TestConfigList:
          assert payload["schemaVersion"] == 1
          assert payload["path"].endswith("settings.json")
          by_key = {entry["key"]: entry for entry in payload["settings"]}
 -        assert len(by_key) == 10
-+        assert len(by_key) == 11
++        assert len(by_key) == 12
          assert by_key["session.shareHistory"]["value"] is True
          assert by_key["autoswitch.threshold"]["value"] == 90.0
          assert by_key["autoswitch.threshold"]["isSet"] is False
 diff --git a/tests/test_desktop.py b/tests/test_desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..9ae647f988783a4656ca7710014f21e050131b8a
+index 0000000000000000000000000000000000000000..72b70555e4f9037fad545f5fa6e59dad7efd83a2
 --- /dev/null
 +++ b/tests/test_desktop.py
-@@ -0,0 +1,418 @@
+@@ -0,0 +1,530 @@
 +"""``cswap desktop``: Claude Desktop, one window per stored account.
 +
 +Claude Desktop keeps one login per profile, and Electron honors
@@ -1064,6 +1205,108 @@ index 0000000000000000000000000000000000000000..9ae647f988783a4656ca7710014f21e0
 +        assert "No accounts stored yet" in _plain(capsys.readouterr().out)
 +
 +
++class TestSharedState:
++    """The Code tab lists local sessions from ``claude-code-sessions/`` in
++    the profile; a fresh profile shows none. The stock profile's copies are
++    keyed by account UUID, so every account's profile links to them."""
++
++    @pytest.fixture
++    def stock(self, tmp_path):
++        stock = tmp_path / "Application Support" / "Claude"
++        with patch.object(desktop, "default_user_data_dir", return_value=stock):
++            yield stock
++
++    def test_fresh_profile_links_every_shared_item(self, manager, stock):
++        data_dir = manager.data_dir("2", "account2@example.com")
++        data_dir.mkdir(parents=True)
++        manager.sync_shared_state(data_dir)
++        for name in desktop.SHARED_STATE_ITEMS:
++            link = data_dir / name
++            assert link.is_symlink() and link.resolve() == (stock / name).resolve()
++            assert (stock / name).is_dir()
++
++    def test_profiles_own_copy_is_merged_then_linked(self, manager, stock, capsys):
++        data_dir = manager.data_dir("1", "account1@example.com")
++        own = data_dir / "claude-code-sessions" / "acct-uuid" / "org-uuid"
++        own.mkdir(parents=True)
++        (own / "local_new.json").write_text("new")
++        (own / "local_same.json").write_text("same")
++        (own / "local_diff.json").write_text("profile version")
++        shared = stock / "claude-code-sessions" / "acct-uuid" / "org-uuid"
++        shared.mkdir(parents=True)
++        (shared / "local_same.json").write_text("same")
++        (shared / "local_diff.json").write_text("stock version")
++        manager.sync_shared_state(data_dir)
++        assert (data_dir / "claude-code-sessions").is_symlink()
++        assert (shared / "local_new.json").read_text() == "new"
++        assert (shared / "local_diff.json").read_text() == "stock version"
++        conflicts = manager.switcher.backup_dir / "history-conflicts"
++        kept = list(conflicts.rglob("local_diff.json"))
++        assert len(kept) == 1 and kept[0].read_text() == "profile version"
++        assert "desktop-1-account1_example.com" in str(kept[0])
++        out = _plain(capsys.readouterr().out)
++        assert "merged the profile's claude-code-sessions" in out
++        assert "1 file(s) in claude-code-sessions differed" in out
++
++    def test_link_elsewhere_is_repointed(self, manager, stock, tmp_path):
++        data_dir = manager.data_dir("1", "account1@example.com")
++        data_dir.mkdir(parents=True)
++        elsewhere = tmp_path / "elsewhere"
++        elsewhere.mkdir()
++        (data_dir / "claude-code-sessions").symlink_to(elsewhere)
++        manager.sync_shared_state(data_dir)
++        assert (data_dir / "claude-code-sessions").resolve() == (
++            stock / "claude-code-sessions"
++        ).resolve()
++
++    def test_sharing_off_removes_the_link_and_keeps_a_real_dir(
++        self, manager, stock
++    ):
++        set_setting(manager.switcher.backup_dir, "desktop.shareSessions", "false")
++        data_dir = manager.data_dir("1", "account1@example.com")
++        (stock / "claude-code-sessions").mkdir(parents=True)
++        data_dir.mkdir(parents=True)
++        (data_dir / "claude-code-sessions").symlink_to(stock / "claude-code-sessions")
++        (data_dir / "spaces-present").mkdir()
++        manager.sync_shared_state(data_dir)
++        assert not (data_dir / "claude-code-sessions").exists()
++        assert (data_dir / "spaces-present").is_dir()
++        assert not (data_dir / "spaces-present").is_symlink()
++
++    def test_windows_keeps_the_profile_private(self, manager, stock):
++        manager.platform = Platform.WINDOWS
++        data_dir = manager.data_dir("1", "account1@example.com")
++        data_dir.mkdir(parents=True)
++        manager.sync_shared_state(data_dir)
++        assert not any((data_dir / n).exists() for n in desktop.SHARED_STATE_ITEMS)
++
++    def test_open_syncs_before_launch_only_when_not_running(self, manager):
++        with patch.object(desktop, "running_pids", return_value=[]), \
++             patch.object(desktop, "launch"), \
++             patch.object(manager, "sync_shared_state") as sync:
++            manager.open(["1"])
++        sync.assert_called_once_with(manager.data_dir("1", "account1@example.com"))
++        with patch.object(desktop, "running_pids", return_value=[4]), \
++             patch.object(desktop, "activate"), \
++             patch.object(manager, "sync_shared_state") as sync:
++            manager.open(["1"])
++        sync.assert_not_called()
++
++    def test_stock_profile_location_per_platform(self, tmp_path, monkeypatch):
++        home = Path.home()
++        assert desktop.default_user_data_dir(Platform.MACOS) == (
++            home / "Library" / "Application Support" / "Claude"
++        )
++        monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
++        assert desktop.default_user_data_dir(Platform.WINDOWS) == (
++            tmp_path / "Roaming" / "Claude"
++        )
++        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
++        assert desktop.default_user_data_dir(Platform.LINUX) == tmp_path / "cfg" / "Claude"
++        monkeypatch.setenv("XDG_CONFIG_HOME", "")
++        assert desktop.default_user_data_dir(Platform.LINUX) == home / ".config" / "Claude"
++
++
 +class TestLifecycle:
 +    def test_remove_refuses_while_the_window_is_open(self, switcher, monkeypatch):
 +        with patch.object(desktop, "running_pids", return_value=[12]), \
@@ -1119,8 +1362,18 @@ index 0000000000000000000000000000000000000000..9ae647f988783a4656ca7710014f21e0
 +        assert load_desktop_settings(tmp_path).app_path is None
 +
 +    def test_wrong_type_is_ignored(self, tmp_path):
-+        settings_path(tmp_path).write_text(json.dumps({"desktop": {"appPath": 3}}))
-+        assert load_desktop_settings(tmp_path).app_path is None
++        settings_path(tmp_path).write_text(
++            json.dumps({"desktop": {"appPath": 3, "shareSessions": "no"}})
++        )
++        loaded = load_desktop_settings(tmp_path)
++        assert loaded.app_path is None and loaded.share_sessions is True
++
++    def test_share_sessions_round_trip(self, tmp_path):
++        assert load_desktop_settings(tmp_path).share_sessions is True
++        set_setting(tmp_path, "desktop.shareSessions", "false")
++        assert load_desktop_settings(tmp_path).share_sessions is False
++        assert unset_setting(tmp_path, "desktop.shareSessions") is True
++        assert load_desktop_settings(tmp_path).share_sessions is True
 +
 +    def test_empty_value_is_refused(self, tmp_path):
 +        with pytest.raises(ConfigError, match="non-empty"):
