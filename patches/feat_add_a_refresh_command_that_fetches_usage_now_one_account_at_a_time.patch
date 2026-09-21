@@ -1,0 +1,518 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kevin Cui <bh@bugs.cc>
+Date: Mon, 21 Sep 2026 03:13:31 -0400
+Subject: feat: add a refresh command that fetches usage now, one account at a
+ time
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+`cswap list` serves the cached measurement while an account is inside
+the serve TTL, its poll plan, or a failure backoff. After a usage
+endpoint 429 the backoff honors Retry-After plus a margin, which is an
+hour or more of "· 1h ago" on the listing with no command that asks
+again. Both accounts sharing one token's budget made this visible:
+identical numbers on both rows, both parked until the same minute.
+
+`cswap refresh [num|email ...]` fetches the given accounts (default:
+all) right now. UsageStore.reserve grows a `force` mode that skips the
+freshness, poll-plan and backoff gates while keeping the two that make
+a request pointless or unsafe: a dead refresh token, and another
+collector's live lease. Every account is claimed, fetched and recorded
+on its own, so a 429 on one never blocks the others; a rate-limited
+account prints the server's own Retry-After deadline (the local backoff
+when the server sent none) and keeps its last measurement on screen.
+Exit code 1 when any requested account could not be refreshed.
+
+diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
+index 461205d5d14a8c2b495a98334e401964f900f1b2..e14dcb1bc712c3809640299c66a44808dfe41da6 100644
+--- a/src/claude_swap/cli.py
++++ b/src/claude_swap/cli.py
+@@ -346,6 +346,45 @@ def _unmap_command(argv: list[str]) -> None:
+         sys.exit(130)
+ 
+ 
++def _refresh_command(argv: list[str]) -> None:
++    """Handle `cswap refresh [num|email ...]` — fetch usage now.
++
++    `list` serves the cached measurement while an account is fresh, not yet
++    poll-due, or in a failure backoff; after a 429 that is an hour of stale
++    numbers with nothing to do about it. This fetches the given accounts
++    (default all) unconditionally, each on its own, and reports a
++    rate-limited account's server-side Retry-After deadline.
++    """
++    parser = argparse.ArgumentParser(
++        prog=f"{_prog_name()} refresh",
++        description=(
++            "Fetch usage for the given accounts (default: all) right now, "
++            "ignoring the poll schedule and any failure backoff. Accounts "
++            "are refreshed independently; a rate-limited one reports when "
++            "the server allows a retry. Exits 1 if any account could not "
++            "be refreshed."
++        ),
++    )
++    parser.add_argument(
++        "accounts",
++        nargs="*",
++        metavar="num|email",
++        help="Accounts to refresh (number, alias or email); default: all",
++    )
++    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
++    args = parser.parse_args(argv)
++
++    try:
++        switcher = ClaudeAccountSwitcher(debug=args.debug)
++        _guard_root(switcher)
++        code = switcher.refresh_usage(args.accounts)
++    except ClaudeSwitchError as e:
++        error(f"Error: {e}")
++        sys.exit(1)
++    if code:
++        sys.exit(code)
++
++
+ def _unclaimed_command(argv: list[str]) -> None:
+     """Handle `cswap unclaimed [--purge ID]` — inspect or drop a stash row.
+ 
+@@ -1008,6 +1047,9 @@ def main() -> None:
+     if argv and argv[0] == "unclaimed":
+         _unclaimed_command(argv[1:])
+         return
++    if argv and argv[0] == "refresh":
++        _refresh_command(argv[1:])
++        return
+     if argv and argv[0] == "alias":
+         _alias_command(argv[1:])
+         return
+@@ -1038,6 +1080,7 @@ Commands:
+   %(prog)s help                       show this help
+   %(prog)s list                       list managed accounts
+   %(prog)s status                     show current account
++  %(prog)s refresh [num|email ...]    fetch usage now, ignoring the poll schedule
+   %(prog)s switch                     rotate to the next account
+   %(prog)s switch <num|email>         switch to a specific account
+   %(prog)s add                        add the current account
+diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
+index e88638fa08ca3baa24095c1e539679c4a7a180b4..8c64df8de23b608705e7c6957cc57502ce28d180 100644
+--- a/src/claude_swap/switcher.py
++++ b/src/claude_swap/switcher.py
+@@ -74,6 +74,7 @@ from claude_swap.printer import (
+     ide_short_name,
+     muted,
+     warning,
++    yellowed,
+ )
+ from claude_swap.paths import (
+     get_backup_root,
+@@ -256,6 +257,56 @@ def _usage_entry_lines(entry: UsageEntry) -> list[str]:
+     return [dimmed(detail)]
+ 
+ 
++def _deadline_note(ts: float) -> str:
++    """"02:07 (in 52m)" for an absolute epoch deadline, in local time."""
++    from datetime import datetime, timezone
++
++    countdown, clock = oauth.format_reset(
++        datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
++    )
++    return f"{clock} (in {countdown})"
++
++
++def _refresh_outcome_lines(
++    entry: UsageEntry, record: FetchRecord | None
++) -> tuple[list[str], bool]:
++    """Styled lines for one account after a forced refresh, and whether the
++    refresh succeeded.
++
++    A fresh measurement renders exactly like ``list``. A failure names its
++    cause and, for a 429, the server's ``Retry-After`` deadline (the local
++    backoff when the server sent none), then the last measurement it keeps
++    serving. No record means the store did not hand us the slot: a dead
++    token or a static state shows as its sentinel, otherwise another cswap
++    process holds the fetch lease this instant.
++    """
++    if record is not None and record.error is None and record.sentinel is None:
++        return _usage_entry_lines(entry), True
++    if record is None and entry.sentinel is None:
++        headline = "not refreshed — another cswap process is fetching this account; run again in a moment"
++    elif record is None or record.sentinel is not None:
++        sentinel = entry.sentinel or record.sentinel or ""
++        headline = SENTINEL_NOTES.get(sentinel, sentinel)
++    elif record.error == "http-429":
++        if record.retry_after_s is not None:
++            deadline = _deadline_note(time.time() + record.retry_after_s)
++            headline = f"rate limited (HTTP 429) — the server allows a retry after {deadline}"
++        elif entry.backoff_until is not None:
++            headline = (
++                "rate limited (HTTP 429) — no Retry-After from the server; "
++                f"backing off until {_deadline_note(entry.backoff_until)}"
++            )
++        else:
++            headline = "rate limited (HTTP 429)"
++    else:
++        headline = f"refresh failed ({ERROR_NOTES.get(record.error, record.error)})"
++    out = [yellowed(headline)]
++    last_seen = last_seen_note(entry)
++    if last_seen is not None:
++        out.append(f"{dimmed('└')} {muted(last_seen)}")
++    return out, False
++
++
+ def _label_token_status(source: str, credentials: str) -> str | None:
+     """Return ``oauth.build_token_status`` relabelled by credential source."""
+     status = oauth.build_token_status(credentials)
+@@ -5199,9 +5250,17 @@ class ClaudeAccountSwitcher:
+         fetch: set[str] | None = None,
+         *,
+         scheduled: bool = False,
++        force: bool = False,
++        records_out: dict[str, FetchRecord] | None = None,
+     ) -> dict[str, UsageEntry]:
+         """Store-backed usage collection: one :class:`UsageEntry` per account.
+ 
++        ``force`` (``cswap refresh``) fetches every member of ``fetch`` now,
++        past the serve TTL, the poll plan and any failure backoff (see
++        ``UsageStore.reserve``); ``records_out`` receives each accepted
++        fetch's raw :class:`FetchRecord`, which is where a 429's
++        ``Retry-After`` lives.
++
+         ``fetch=None`` (on-demand callers: ``--list``/``--status``/switch
+         strategies, dashboards) makes every account a candidate but respects
+         the persisted poll plans; the auto engine passes an explicit set whose
+@@ -5275,6 +5334,7 @@ class ClaudeAccountSwitcher:
+                 identities,
+                 respect_plans=False,
+                 repair_overslept=scheduled,
++                force=force,
+             )
+         # An expired ACTIVE credential that cannot reach the fetch path (and
+         # its locked refresh) this tick — failure backoff, a concurrent
+@@ -5303,6 +5363,8 @@ class ClaudeAccountSwitcher:
+             accepted_records = {
+                 num: record for num, record in records.items() if num in accepted
+             }
++            if records_out is not None:
++                records_out.update(accepted_records)
+             for num, record in accepted_records.items():
+                 if record.sentinel is not None:
+                     sentinels[num] = record.sentinel
+@@ -5859,6 +5921,58 @@ class ClaudeAccountSwitcher:
+         except Exception:
+             self._logger.debug("Failed to detect running instances", exc_info=True)
+ 
++    def refresh_usage(self, identifiers: list[str] | None = None) -> int:
++        """``cswap refresh [num|email ...]``: fetch usage for the given accounts
++        (default: all) right now, and say per account what came back.
++
++        ``list`` serves the cached measurement while an account is inside
++        the serve TTL, its poll plan, or a failure backoff — after a 429 that
++        is an hour or more of "· 1h ago" with no way to ask again. This
++        bypasses all three gates (``UsageStore.reserve(force=True)``) but
++        keeps the fetches independent: every account is claimed, fetched and
++        recorded on its own, so a 429 on one never blocks the others, and a
++        rate-limited account reports the server's own ``Retry-After``
++        deadline instead of the vaguer local backoff. Returns the exit code:
++        1 when any requested account could not be refreshed.
++        """
++        if not self.sequence_file.exists():
++            print(dimmed("No accounts are managed yet."))
++            return 1
++        accounts_info = self._build_accounts_info()
++        by_num = {str(info[0]): info for info in accounts_info}
++        if identifiers:
++            selected: list[str] = []
++            for ident in identifiers:
++                num = self._resolve_account_identifier(ident)
++                if num is None or num not in by_num:
++                    error(f"Error: account not found: {ident}")
++                    return 1
++                if num not in selected:
++                    selected.append(num)
++        else:
++            selected = list(by_num)
++        infos = [by_num[num] for num in selected]
++
++        records: dict[str, FetchRecord] = {}
++        entries = self._collect_usage_entries(
++            infos, fetch=set(selected), force=True, records_out=records
++        )
++        failed = 0
++        print(bolded("Accounts:"))
++        for i, num in enumerate(selected):
++            _n, email, org_name, org_uuid, is_active, _c, alias = by_num[num]
++            tag = self._get_display_tag(email, org_name, org_uuid)
++            label = f"{accent(alias)} ({email})" if alias else email
++            marker = f" {bold_accent('(active)')}" if is_active else ""
++            print(f"  {num}: {label} {muted(f'[{tag}]')}{marker}")
++            lines, ok = _refresh_outcome_lines(entries[num], records.get(num))
++            failed += 0 if ok else 1
++            for line in lines:
++                print(f"     {line}")
++            if i < len(selected) - 1:
++                print()
++        return 1 if failed else 0
++
+     def _active_account_usage(
+         self, account_num: str, current_email: str, org_uuid: str
+     ) -> UsageEntry:
+diff --git a/src/claude_swap/usage_store.py b/src/claude_swap/usage_store.py
+index 39fe82ee52738f77017f39ef3b6c190573652919..53c6cf3a52ecf19a3da947048c91079f8fe246ea 100644
+--- a/src/claude_swap/usage_store.py
++++ b/src/claude_swap/usage_store.py
+@@ -997,10 +997,17 @@ class UsageStore:
+         *,
+         respect_plans: bool,
+         repair_overslept: bool = False,
++        force: bool = False,
+     ) -> dict[str, str]:
+         """Atomically win the right to fetch: re-check eligibility and stamp
+         a bounded lease in one locked pass, returning slot → fencing id.
+ 
++        ``force`` (``cswap refresh``): the user asked for a fetch NOW, so
++        freshness, the poll plan and any failure backoff are ignored. Only
++        the two gates that make a request pointless or unsafe remain — a
++        dead refresh token (a request can only 401) and another collector's
++        live lease (it is fetching this very slot).
++
+         Deciding eligibility on a lock-free :meth:`entries` read and then
+         claiming separately lets two collectors both pass the check and both
+         fetch; the re-check under the lock closes that window. Eligibility:
+@@ -1035,7 +1042,7 @@ class UsageStore:
+                 else:
+                     assert isinstance(row, dict)
+                     if not _row_eligible(
+-                        row, now, respect_plans, repair_overslept
++                        row, now, respect_plans, repair_overslept, force=force
+                     ):
+                         continue
+                 claim_id = uuid.uuid4().hex
+@@ -1196,21 +1203,27 @@ def _num_or_none(value: object) -> float | None:
+ 
+ 
+ def _row_eligible(
+-    row: dict, now: float, respect_plans: bool, repair_overslept: bool = False
++    row: dict,
++    now: float,
++    respect_plans: bool,
++    repair_overslept: bool = False,
++    force: bool = False,
+ ) -> bool:
+     """Fetch eligibility of a stored row, evaluated under the write lock
+-    (see :meth:`UsageStore.reserve` for the two caller modes)."""
++    (see :meth:`UsageStore.reserve` for the caller modes)."""
+     if int(row.get("authDeadStrikes") or 0) >= AUTH_DEAD_STRIKES:
+         return False
+-    backoff_until = _num_or_none(row.get("backoffUntil"))
+-    if backoff_until is not None and now < backoff_until:
+-        return False
+     if _live_claim(
+         _num_or_none(row.get("claimUntil")),
+         _num_or_none(row.get("lastAttemptAt")),
+         now,
+     ):
+         return False
++    if force:
++        return True
++    backoff_until = _num_or_none(row.get("backoffUntil"))
++    if backoff_until is not None and now < backoff_until:
++        return False
+     fetched_at = _num_or_none(row.get("fetchedAt"))
+     stale = fetched_at is None or (now - fetched_at) > SERVE_TTL_S
+     next_poll_at = _num_or_none(row.get("nextPollAt"))
+diff --git a/tests/test_refresh_command.py b/tests/test_refresh_command.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..518e55182c63c0ec6a354f14271a8e3e6a4febd1
+--- /dev/null
++++ b/tests/test_refresh_command.py
+@@ -0,0 +1,157 @@
++"""``cswap refresh``: fetch usage on demand, one account at a time.
++
++``list`` serves a cached measurement while an account is fresh, not poll-due,
++or backing off after a failure. After a usage-endpoint 429 that backoff is an
++hour or more, and nothing lets the user ask again. ``refresh`` bypasses those
++gates, keeps every account's fetch independent, and reports a rate-limited
++account's server-side ``Retry-After`` deadline.
++"""
++
++import json
++import re
++import sys
++import time
++from unittest.mock import patch
++
++import pytest
++
++from claude_swap import cli
++from claude_swap.json_output import USAGE_RELOGIN_REQUIRED
++from claude_swap.switcher import ClaudeAccountSwitcher
++from claude_swap.usage_store import FetchRecord
++
++USAGE_1 = {"five_hour": {"pct": 40.0}, "seven_day": {"pct": 10.0}}
++USAGE_2 = {"five_hour": {"pct": 90.0}, "seven_day": {"pct": 60.0}}
++
++
++def _creds(tag: str) -> str:
++    return json.dumps({"claudeAiOauth": {
++        "accessToken": f"at-{tag}", "refreshToken": f"rt-{tag}",
++        "expiresAt": int((time.time() + 3600) * 1000),
++    }})
++
++
++INFOS = [
++    (1, "account1@example.com", "", "", True, _creds("1"), ""),
++    (2, "account2@example.com", "", "", False, _creds("2"), ""),
++]
++
++
++@pytest.fixture
++def switcher(temp_home, sample_sequence_data):
++    sw = ClaudeAccountSwitcher()
++    sw._setup_directories()
++    sw._write_json(sw.sequence_file, sample_sequence_data)
++    return sw
++
++
++def _run(sw, outcomes: dict[str, FetchRecord], identifiers=None, capsys=None):
++    """Run ``refresh_usage`` with canned per-account fetch outcomes; returns
++    ``(exit_code, output, fetched slot numbers)``."""
++    fetched: list[str] = []
++
++    def fetch(info, rejected_fp=None):
++        fetched.append(str(info[0]))
++        return outcomes[str(info[0])]
++
++    with patch.object(sw, "_build_accounts_info", return_value=list(INFOS)), \
++         patch.object(sw, "_fetch_account_usage", side_effect=fetch):
++        code = sw.refresh_usage(identifiers)
++    captured = capsys.readouterr() if capsys else None
++    text = (captured.out + captured.err) if captured else ""
++    return code, re.sub(r"\x1b\[[0-9;]*m", "", text), fetched
++
++
++class TestRefresh:
++    def test_fetches_past_the_serve_ttl_and_a_429_backoff(self, switcher, capsys):
++        """A fresh measurement and an hour-long 429 backoff both gate ``list``;
++        neither gates ``refresh``."""
++        code, _, fetched = _run(switcher, {
++            "1": FetchRecord(usage=USAGE_1),
++            "2": FetchRecord(error="http-429", retry_after_s=3600.0),
++        }, capsys=capsys)
++        assert code == 1 and fetched == ["1", "2"]
++        entries = switcher._usage_store.entries(
++            {"1": ("account1@example.com", ""), "2": ("account2@example.com", "")}
++        )
++        assert entries["1"].fresh(time.time())
++        assert entries["2"].in_backoff(time.time())
++        # Right away again: slot 1 is fresh, slot 2 is backing off.
++        code, _, fetched = _run(switcher, {
++            "1": FetchRecord(usage=USAGE_1),
++            "2": FetchRecord(usage=USAGE_2),
++        }, capsys=capsys)
++        assert code == 0 and fetched == ["1", "2"]
++
++    def test_one_accounts_429_does_not_block_the_other(self, switcher, capsys):
++        code, out, _ = _run(switcher, {
++            "1": FetchRecord(error="http-429", retry_after_s=1800.0),
++            "2": FetchRecord(usage=USAGE_2),
++        }, capsys=capsys)
++        assert code == 1
++        one, two = out.split("  2: ")
++        assert "rate limited (HTTP 429)" in one
++        assert "the server allows a retry after" in one
++        assert re.search(r"\(in (29|30)m\)", one)
++        assert "90%" in two and "429" not in two
++
++    def test_429_without_retry_after_reports_the_local_backoff(self, switcher, capsys):
++        _, out, _ = _run(switcher, {
++            "1": FetchRecord(error="http-429"),
++            "2": FetchRecord(usage=USAGE_2),
++        }, capsys=capsys)
++        assert "no Retry-After from the server; backing off until" in out
++
++    def test_failure_keeps_serving_the_last_measurement(self, switcher, capsys):
++        _run(switcher, {"1": FetchRecord(usage=USAGE_1),
++                        "2": FetchRecord(usage=USAGE_2)}, capsys=capsys)
++        _, out, _ = _run(switcher, {
++            "1": FetchRecord(error="timeout"),
++            "2": FetchRecord(usage=USAGE_2),
++        }, capsys=capsys)
++        assert "refresh failed (timeout)" in out
++        assert "last seen 40% used" in out
++
++    def test_selects_by_number_alias_or_email(self, switcher, capsys):
++        outcomes = {"1": FetchRecord(usage=USAGE_1), "2": FetchRecord(usage=USAGE_2)}
++        _, out, fetched = _run(switcher, outcomes, ["2"], capsys=capsys)
++        assert fetched == ["2"] and "  1: " not in out
++        _, _, fetched = _run(switcher, outcomes, ["account1@example.com", "2"], capsys=capsys)
++        assert fetched == ["1", "2"]
++
++    def test_unknown_account_is_an_error(self, switcher, capsys):
++        code, out, fetched = _run(switcher, {}, ["nobody@example.com"], capsys=capsys)
++        assert code == 1 and fetched == []
++        assert "account not found: nobody@example.com" in out
++
++    def test_dead_token_is_reported_not_fetched(self, switcher, capsys):
++        store = switcher._usage_store
++        ident = {"1": ("account1@example.com", ""), "2": ("account2@example.com", "")}
++        claims = store.reserve(["1"], ident, respect_plans=False)
++        store.record({"1": FetchRecord(error="invalid_grant", struck_fp=None)}, ident, claims)
++        code, out, fetched = _run(switcher, {"2": FetchRecord(usage=USAGE_2)}, capsys=capsys)
++        assert code == 1 and fetched == ["2"]
++        assert "re-login needed" in out
++
++
++class TestRefreshCli:
++    def test_dispatched_from_main(self, temp_home):
++        with patch("claude_swap.cli._refresh_command") as fn, \
++             patch.object(sys, "argv", ["claude-swap", "refresh", "2"]):
++            cli.main()
++        fn.assert_called_once_with(["2"])
++
++    def test_exit_code_follows_the_switcher(self, temp_home):
++        with patch("claude_swap.cli.ClaudeAccountSwitcher") as cls, \
++             patch("claude_swap.cli._guard_root"):
++            cls.return_value.refresh_usage.return_value = 1
++            with pytest.raises(SystemExit) as exc:
++                cli._refresh_command(["1", "--debug"])
++        assert exc.value.code == 1
++        cls.return_value.refresh_usage.assert_called_once_with(["1"])
++
++    def test_listed_in_help(self, temp_home, capsys):
++        with patch.object(sys, "argv", ["claude-swap", "--help"]), \
++             pytest.raises(SystemExit):
++            cli.main()
++        assert "refresh [num|email ...]" in capsys.readouterr().out
+diff --git a/tests/test_usage_store.py b/tests/test_usage_store.py
+index 5367eda4e458cf9ae54d6a17f06c7f654e096349..96f8890fc3f3d13874db6a420bb4f8c1677b8974 100644
+--- a/tests/test_usage_store.py
++++ b/tests/test_usage_store.py
+@@ -1372,6 +1372,29 @@ class TestReserve:
+         assert store.reserve(["1"], IDENT, respect_plans=True) == {}
+         assert store.reserve(["1"], IDENT, respect_plans=False) == {}
+ 
++    def test_force_ignores_freshness_plan_and_backoff(self, store, clock):
++        """``cswap refresh``: fresh, not-yet-due, and backing-off rows are all
++        fetchable on demand; the row still gets a fencing claim."""
++        store.record({"1": FetchRecord(usage=USAGE)}, IDENT)
++        store.set_poll_plan({"1": (clock.now + 86_400.0, 300.0)}, IDENT)
++        clock.advance(CLAIM_TTL_S + 1)  # claim expired; fresh and not due
++        assert store.reserve(["1"], IDENT, respect_plans=True) == {}
++        claims = store.reserve(["1"], IDENT, respect_plans=False, force=True)
++        assert set(claims) == {"1"}
++        store.record({"1": FetchRecord(error="http-429", retry_after_s=3600.0)},
++                     IDENT, claims)
++        clock.advance(CLAIM_TTL_S + 1)  # inside the hour-long 429 backoff
++        assert store.reserve(["1"], IDENT, respect_plans=False) == {}
++        assert set(store.reserve(["1"], IDENT, respect_plans=False, force=True)) == {"1"}
++
++    def test_force_still_respects_dead_token_and_live_claim(self, store, clock):
++        store.record({"1": FetchRecord(error="invalid_grant")}, IDENT)
++        clock.advance(TRUST_MAX_AGE_S)
++        assert store.reserve(["1"], IDENT, respect_plans=False, force=True) == {}
++        # Another collector's live lease on slot 2 is never stolen.
++        assert set(store.reserve(["2"], IDENT, respect_plans=True)) == {"2"}
++        assert store.reserve(["2"], IDENT, respect_plans=False, force=True) == {}
++
+     def test_unknown_row_and_identity_mismatch_win(self, store, clock):
+         assert set(store.reserve(["1"], IDENT, respect_plans=True)) == {"1"}
+         # Slot reused by a different account: the old row is invisible and

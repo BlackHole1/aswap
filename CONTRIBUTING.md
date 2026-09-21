@@ -92,7 +92,7 @@ bun run patches verify
 bun run test
 ```
 
-`git status` should show only `patches/` (plus the `cswap` pointer after an `update`).
+`git status` should show only `patches/` (plus `upstream.json` after an `update`).
 
 ## Contribution license
 

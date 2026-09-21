@@ -46,12 +46,12 @@ The tooling is `scripts/patches.ts` (bun), reachable as `bun run patches <cmd>`.
 | `bun run patches export --check` | report what export would write, exit 1 if anything (CI) |
 | `bun run patches status` | base, HEAD, index, orphans, pending export |
 | `bun run patches verify` | apply the series in a throwaway worktree, exit 1 on failure |
-| `bun run patches update [ref]` | fetch upstream, stage `<ref>` (default `origin/main`) as the new base, re-apply, export |
+| `bun run patches update [ref]` | fetch upstream, pin `<ref>` (default `origin/main`) in `upstream.json`, re-apply, export |
 | `bun run test` | upstream test suite on the patched tree |
 | `bun run build` | claude-swap and aswap wheels into `dist/`; refuses when the tree and `patches/` disagree |
 | `bun run install:cswap` / `install:aswap` / `install:all` | build, then `uv tool install` the patched cswap in place, the side-by-side `aswap` command, or both |
 
-Base commit: `git ls-files --stage cswap`. Patched commits: `git -C cswap log <base>..HEAD`.
+Base commit: the `commit` in `upstream.json`. Patched commits: `git -C cswap log <base>..HEAD`.
 
 Releases: `gh workflow run publish.yml` (optionally `-f bump=minor|major` or `-f version=X.Y.Z`); the workflow computes the version from tags, publishes `aswap` to PyPI and creates the tag and release. No version lives in the tree. `packaging/aswap/src/aswap/cli.py` is the `aswap` wrapper (`link` / `unlink`); cswap behavior changes are patches, never wrapper code.
 
@@ -78,7 +78,7 @@ review the result before doing anything else.
 Do not edit the `.patch` file. Amend the commit that produced it:
 
 ```bash
-BASE=$(git ls-files --stage cswap | awk '{print $2}')
+BASE=$(bun -e 'console.log(require("./upstream.json").commit)')
 git -C cswap log --oneline $BASE..HEAD          # find the commit
 # make the change in cswap/, then
 git -C cswap commit --fixup <sha> -a
@@ -99,7 +99,7 @@ the old file behind as `not listed`: delete it.
 Commit the new change on top, then move it with a non-interactive rebase:
 
 ```bash
-BASE=$(git ls-files --stage cswap | awk '{print $2}')
+BASE=$(bun -e 'console.log(require("./upstream.json").commit)')
 git -C cswap rebase --onto <sha-to-insert-after> HEAD~1 HEAD   # simplest for one commit
 # or edit the order with a scripted sequence editor
 GIT_SEQUENCE_EDITOR='sed -i "" "s/^pick \(SHA_A\)/pick SHA_B\npick \1/"' git -C cswap rebase -i $BASE
@@ -153,5 +153,5 @@ patches together. On a conflict it stops exactly like `apply` does; resolve,
 - `bun run patches export --check` reports nothing to write.
 - `bun run patches verify` passes.
 - `bun run test` passes.
-- `git status` in the superproject shows only `patches/` changes (plus the
-  `cswap` pointer after an `update`); never a `cswap` change otherwise.
+- `git status` in the superproject shows only `patches/` changes (plus
+  `upstream.json` after an `update`).

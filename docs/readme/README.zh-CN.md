@@ -43,6 +43,7 @@ aswap upgrade  # 按安装方式执行 uv tool upgrade aswap 或 pipx upgrade as
 | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [跟随活动凭据的真正所有者](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | `~/.claude.json` 过期后可能写着账户 B，而钥匙串里是账户 A 的 token。上游据此误报 A 需要重新登录，B 也不再刷新。补丁按凭据的真正所有者判断，并跨运行记住结果。 |
 | [跟随实际安装的发行版](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)        | 版本号、更新检查和 `upgrade` 写死了 `claude-swap`，装成 `aswap` 后全部失效。补丁改为跟随真正提供代码的发行版。                                                |
+| [按需刷新用量](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)              | 用量接口返回 429 后，`ls` 会显示一小时前的旧数据且无法重新获取。`cswap refresh [账号 ...]` 立即刷新，各账号互不影响，被限流时告知服务端允许重试的时间。       |
 
 每个补丁都是一次提交，提交信息说明上游的问题。完整列表见 [patches/.patches](../../patches/.patches)。
 
