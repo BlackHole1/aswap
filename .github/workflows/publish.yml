@@ -1,0 +1,38 @@
+name: publish
+
+# Tag v<version> (matching package.json) to build the wheels, publish aswap to
+# PyPI through trusted publishing, and attach both wheels to the GitHub release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - uses: astral-sh/setup-uv@v5
+      - name: Tag matches package.json
+        run: |
+          v=$(node -p "require('./package.json').version")
+          [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} != package.json v$v"; exit 1; }
+      - run: bun install --frozen-lockfile
+      - run: bun run patches apply
+      - run: bun run build
+      - name: Publish aswap to PyPI
+        run: uv publish dist/aswap-*
+      - name: Attach wheels to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" dist/*.whl dist/*.tar.gz --clobber

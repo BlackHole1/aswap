@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "ignorePatterns": ["node_modules", "cswap", "patches", ".patches-verify"],
+  "printWidth": 120,
+  "trailingComma": "all",
+  "sortImports": {
+    "newlinesBetween": false,
+    "groups": [
+      "style",
+      ["type-builtin", "type-external", "type-internal", "type-parent", "type-sibling", "type-index"],
+      { "newlinesBetween": true },
+      ["value-builtin", "value-external"],
+      ["value-internal", "value-parent", "value-sibling", "value-index"],
+      "unknown"
+    ]
+  }
+}

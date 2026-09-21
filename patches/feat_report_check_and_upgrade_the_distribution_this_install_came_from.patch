@@ -1,0 +1,262 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kevin Cui <bh@bugs.cc>
+Date: Mon, 21 Sep 2026 01:37:44 -0400
+Subject: feat: report, check, and upgrade the distribution this install came
+ from
+
+`__version__`, the PyPI update check, and `cswap upgrade` all hard-code the
+`claude-swap` distribution. A repackaging that ships the same `claude_swap`
+module under another distribution name (aswap: upstream plus a patch series,
+command `aswap`) then breaks in three ways: importing the package raises
+PackageNotFoundError for `claude-swap`, every run compares aswap's version
+against claude-swap's PyPI release and nags about an "update", and `upgrade`
+runs `uv tool upgrade claude-swap`, which reinstalls the other project.
+
+A new `claude_swap.distribution` module answers which distribution provides
+the `claude_swap` package from the installed metadata
+(`importlib.metadata.packages_distributions`), preferring a repackaging over
+upstream when both are present. `__version__` reads that distribution's
+version, the update check queries its PyPI project and names it in the
+message, and the self-upgrade upgrades it. The command shown in hints is
+`cswap` for upstream and the distribution name otherwise. Upstream installs
+behave exactly as before.
+
+diff --git a/src/claude_swap/__init__.py b/src/claude_swap/__init__.py
+index 8757fd107fb185fdece5753601164e475466b0de..6b9095b5167d031365aa00da0a7b40dfd0ce026b 100644
+--- a/src/claude_swap/__init__.py
++++ b/src/claude_swap/__init__.py
+@@ -1,8 +1,8 @@
+ """Multi-account switcher for Claude Code."""
+ 
+-from importlib.metadata import version
++from claude_swap.distribution import distribution_version
+ 
+-__version__ = version("claude-swap")
++__version__ = distribution_version()
+ 
+ from claude_swap.switcher import ClaudeAccountSwitcher
+ 
+diff --git a/src/claude_swap/distribution.py b/src/claude_swap/distribution.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..325693364b45e28252029d2f15440cb7ecdc1cf1
+--- /dev/null
++++ b/src/claude_swap/distribution.py
+@@ -0,0 +1,42 @@
++"""Which distribution this code was installed from.
++
++Upstream ships as ``claude-swap`` (commands ``cswap`` and ``claude-swap``).
++A repackaging that carries the same ``claude_swap`` module under another
++distribution name (``aswap``: upstream plus a patch series, command ``aswap``)
++must report ITS version, check PyPI for ITS releases, and upgrade ITSELF, or
++every run nags about the other project's version and ``upgrade`` reinstalls
++the wrong package. The installed metadata answers which one this is.
++"""
++
++from __future__ import annotations
++
++from importlib.metadata import PackageNotFoundError, packages_distributions, version
++
++UPSTREAM_DISTRIBUTION = "claude-swap"
++UPSTREAM_COMMAND = "cswap"
++
++
++def distribution_name() -> str:
++    """The distribution that provides the ``claude_swap`` package."""
++    try:
++        names = list(packages_distributions().get("claude_swap") or [])
++    except Exception:
++        names = []
++    for name in names:
++        if name != UPSTREAM_DISTRIBUTION:
++            return name  # a repackaging owns this install
++    return names[0] if names else UPSTREAM_DISTRIBUTION
++
++
++def distribution_version() -> str:
++    try:
++        return version(distribution_name())
++    except PackageNotFoundError:
++        return "0.0.0"
++
++
++def command_name() -> str:
++    """The command a user types to reach this install: ``cswap`` for upstream,
++    the distribution name for a repackaging (``aswap``)."""
++    name = distribution_name()
++    return UPSTREAM_COMMAND if name == UPSTREAM_DISTRIBUTION else name
+diff --git a/src/claude_swap/update_check.py b/src/claude_swap/update_check.py
+index f30239ca90cb10647863ae3b29da29a523eb1719..fec26ed6c32a915d8effa3be87a23cb07328d98a 100644
+--- a/src/claude_swap/update_check.py
++++ b/src/claude_swap/update_check.py
+@@ -1,4 +1,5 @@
+-"""Check PyPI for newer versions of claude-swap."""
++"""Check PyPI for newer versions of this distribution (claude-swap, or a
++repackaging such as aswap; see ``claude_swap.distribution``)."""
+ 
+ from __future__ import annotations
+ 
+@@ -12,10 +13,15 @@ from pathlib import Path
+ from typing import NamedTuple
+ 
+ from claude_swap.cache import CACHE_DIR, MISSING, read_cache, write_cache
++from claude_swap.distribution import command_name, distribution_name
+ 
+ CACHE_PATH = CACHE_DIR / "update_check.json"
+ CACHE_TTL = 24 * 3600  # 24 hours
+-PYPI_URL = "https://pypi.org/pypi/claude-swap/json"
++PYPI_URL = "https://pypi.org/pypi/claude-swap/json"  # upstream; see _pypi_url()
++
++
++def _pypi_url() -> str:
++    return f"https://pypi.org/pypi/{distribution_name()}/json"
+ 
+ _VERSION_RE = re.compile(
+     r"(\d+(?:\.\d+)*)(?:[-_.]?(alpha|beta|preview|pre|rc|a|b|c)[-_.]?(\d+)?)?",
+@@ -104,7 +110,7 @@ def check_for_update(current_version: str) -> str | None:
+         else:
+             # Fetch from PyPI
+             try:
+-                req = urllib.request.Request(PYPI_URL)
++                req = urllib.request.Request(_pypi_url())
+                 with urllib.request.urlopen(req, timeout=2) as resp:
+                     data = json.loads(resp.read().decode())
+                 latest_version = data["info"]["version"]
+@@ -116,21 +122,22 @@ def check_for_update(current_version: str) -> str | None:
+ 
+         if latest_version and _is_newer(latest_version, current_version):
+             method = _detect_install_method()
++            dist, command = distribution_name(), command_name()
+             direct = {
+-                "uv": "uv tool upgrade claude-swap",
+-                "pipx": "pipx upgrade claude-swap",
++                "uv": f"uv tool upgrade {dist}",
++                "pipx": f"pipx upgrade {dist}",
+             }.get(method or "")
+             if direct and sys.platform != "win32":
+                 # cswap upgrade actually performs the upgrade here.
+-                hint = "Run `cswap upgrade` to update."
++                hint = f"Run `{command} upgrade` to update."
+             elif direct:
+                 # Windows: cswap upgrade only prints, so point at the real command.
+                 hint = f"Run `{direct}` to update."
+             else:
+                 # Unknown install method: cswap upgrade shows manual instructions.
+-                hint = "Run `cswap upgrade` for upgrade instructions."
++                hint = f"Run `{command} upgrade` for upgrade instructions."
+             return (
+-                f"A newer version of claude-swap is available ({latest_version}). "
++                f"A newer version of {dist} is available ({latest_version}). "
+                 f"You are using {current_version}. {hint}"
+             )
+         return None
+@@ -147,9 +154,10 @@ def run_self_upgrade() -> int:
+     from claude_swap.printer import accent, error
+ 
+     method = _detect_install_method()
++    dist = distribution_name()
+     commands = {
+-        "uv": ["uv", "tool", "upgrade", "claude-swap"],
+-        "pipx": ["pipx", "upgrade", "claude-swap"],
++        "uv": ["uv", "tool", "upgrade", dist],
++        "pipx": ["pipx", "upgrade", dist],
+     }
+     cmd = commands.get(method or "")
+     if cmd is None:
+@@ -158,9 +166,9 @@ def run_self_upgrade() -> int:
+             f"  sys.prefix:     {sys.prefix}\n"
+             f"  sys.executable: {sys.executable}\n"
+             "To upgrade manually, run one of:\n"
+-            "  uv tool upgrade claude-swap\n"
+-            "  pipx upgrade claude-swap\n"
+-            f"  {sys.executable} -m pip install --upgrade claude-swap\n"
++            f"  uv tool upgrade {dist}\n"
++            f"  pipx upgrade {dist}\n"
++            f"  {sys.executable} -m pip install --upgrade {dist}\n"
+             "If you installed with `pip install -e .`, use `git pull` instead."
+         )
+         return 1
+@@ -170,7 +178,7 @@ def run_self_upgrade() -> int:
+     # though the package itself updates. cswap exits right after this, which
+     # releases the lock, so the user can just run the command themselves.
+     if sys.platform == "win32":
+-        print(f"To upgrade claude-swap on Windows, run:\n  {accent(' '.join(cmd))}")
++        print(f"To upgrade {dist} on Windows, run:\n  {accent(' '.join(cmd))}")
+         return 1
+ 
+     try:
+diff --git a/tests/test_distribution.py b/tests/test_distribution.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..7fa51264072ea5feeeb24a64acb07592244dc164
+--- /dev/null
++++ b/tests/test_distribution.py
+@@ -0,0 +1,70 @@
++"""The code reports, checks, and upgrades the distribution it was installed
++from: upstream ``claude-swap`` or a repackaging such as ``aswap``."""
++
++from unittest.mock import MagicMock, patch
++
++from claude_swap import distribution, update_check
++
++
++class TestDistributionName:
++    def test_upstream_is_the_default(self, monkeypatch):
++        monkeypatch.setattr(
++            distribution, "packages_distributions", lambda: {"claude_swap": ["claude-swap"]}
++        )
++        assert distribution.distribution_name() == "claude-swap"
++        assert distribution.command_name() == "cswap"
++
++    def test_a_repackaging_owns_the_install(self, monkeypatch):
++        monkeypatch.setattr(
++            distribution, "packages_distributions", lambda: {"claude_swap": ["aswap"]}
++        )
++        assert distribution.distribution_name() == "aswap"
++        assert distribution.command_name() == "aswap"
++
++    def test_repackaging_wins_when_both_metadata_are_present(self, monkeypatch):
++        monkeypatch.setattr(
++            distribution,
++            "packages_distributions",
++            lambda: {"claude_swap": ["claude-swap", "aswap"]},
++        )
++        assert distribution.distribution_name() == "aswap"
++
++    def test_no_metadata_falls_back_to_upstream(self, monkeypatch):
++        monkeypatch.setattr(distribution, "packages_distributions", lambda: {})
++        assert distribution.distribution_name() == "claude-swap"
++        monkeypatch.setattr(
++            distribution, "version", MagicMock(side_effect=distribution.PackageNotFoundError)
++        )
++        assert distribution.distribution_version() == "0.0.0"
++
++
++class TestUpdateCheckFollowsTheDistribution:
++    def _as_aswap(self, monkeypatch, tmp_path):
++        monkeypatch.setattr(update_check, "distribution_name", lambda: "aswap")
++        monkeypatch.setattr(update_check, "command_name", lambda: "aswap")
++        monkeypatch.setattr(update_check, "CACHE_PATH", tmp_path / "update_check.json")
++
++    def test_pypi_url_and_message_name_the_distribution(self, monkeypatch, tmp_path):
++        self._as_aswap(monkeypatch, tmp_path)
++        resp = MagicMock()
++        resp.read.return_value = b'{"info": {"version": "9.9.9"}}'
++        resp.__enter__ = lambda s: s
++        resp.__exit__ = MagicMock(return_value=False)
++        with patch("claude_swap.update_check.urllib.request.urlopen", return_value=resp) as u, \
++             patch("claude_swap.update_check._detect_install_method", return_value="uv"), \
++             patch("claude_swap.update_check.sys.platform", "linux"):
++            msg = update_check.check_for_update("0.1.0")
++        assert u.call_args[0][0].full_url == "https://pypi.org/pypi/aswap/json"
++        assert msg is not None
++        assert "A newer version of aswap is available (9.9.9)" in msg
++        assert "`aswap upgrade`" in msg
++        assert "claude-swap" not in msg and "cswap" not in msg
++
++    def test_self_upgrade_targets_the_distribution(self, monkeypatch, tmp_path):
++        self._as_aswap(monkeypatch, tmp_path)
++        with patch("claude_swap.update_check._detect_install_method", return_value="uv"), \
++             patch("claude_swap.update_check.sys.platform", "linux"), \
++             patch("claude_swap.update_check.subprocess.run") as run:
++            run.return_value.returncode = 0
++            assert update_check.run_self_upgrade() == 0
++        assert run.call_args[0][0] == ["uv", "tool", "upgrade", "aswap"]

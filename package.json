@@ -1,0 +1,34 @@
+{
+  "name": "aswap",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Account swap for Claude Code: claude-swap (cswap) plus a maintained patch series",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "patches": "bun scripts/patches.ts",
+    "setup": "git submodule update --init && bun scripts/patches.ts apply",
+    "apply": "bun scripts/patches.ts apply",
+    "export": "bun scripts/patches.ts export",
+    "status": "bun scripts/patches.ts status",
+    "verify": "bun scripts/patches.ts verify",
+    "update": "bun scripts/patches.ts update",
+    "test": "cd cswap && uv run pytest -q",
+    "build": "bun scripts/build.ts",
+    "install:cswap": "bun scripts/install.ts cswap",
+    "install:aswap": "bun scripts/install.ts aswap",
+    "install:all": "bun scripts/install.ts all",
+    "lint": "oxlint .",
+    "lint:fix": "oxlint . --fix",
+    "format": "oxfmt --check .",
+    "format:fix": "oxfmt .",
+    "fix": "bun run lint:fix && bun run format:fix",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.0",
+    "oxfmt": "^0.56.0",
+    "oxlint": "^1.71.0",
+    "typescript": "^7.0.2"
+  }
+}

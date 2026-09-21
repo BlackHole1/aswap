@@ -1,0 +1,49 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Lint, patches, tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - uses: astral-sh/setup-uv@v5
+      - name: Install script tooling
+        run: bun install --frozen-lockfile
+      - name: Lint (oxlint)
+        run: bun run lint
+      - name: Check formatting (oxfmt)
+        run: bun run format
+      - name: Typecheck scripts
+        run: bun run typecheck
+      - name: Patches apply cleanly
+        run: bun run patches verify
+      - name: Apply the series
+        run: bun run patches apply
+      - name: Exported patches match the applied commits
+        run: bun run patches export --check
+      - name: Upstream test suite on the patched tree
+        run: bun run test
+      - name: Build the wheel
+        run: bun run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

@@ -1,0 +1,13 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["import"],
+  "categories": {},
+  "rules": {
+    "import/consistent-type-specifier-style": ["error", "prefer-top-level"]
+  },
+  "env": {
+    "builtin": true
+  },
+  "globals": {},
+  "ignorePatterns": ["node_modules", "cswap", "patches", ".patches-verify"]
+}

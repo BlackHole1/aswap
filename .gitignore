@@ -1,0 +1,4 @@
+node_modules/
+.patches-verify/
+dist/
+.DS_Store
