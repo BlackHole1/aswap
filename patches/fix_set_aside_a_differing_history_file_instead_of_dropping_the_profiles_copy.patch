@@ -1,0 +1,265 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kevin Cui <bh@bugs.cc>
+Date: Mon, 21 Sep 2026 03:41:58 -0400
+Subject: fix: set aside a differing history file instead of dropping the
+ profile's copy
+
+`--share-history` first merges the history a session profile accumulated
+on its own into `~/.claude`, then links the profile to it. The merge
+treats every same-named file as a duplicate: when the target already
+exists the profile's copy is unlinked without comparing content
+(realiti4/claude-swap#241). That assumption only holds for a transcript
+that is byte-identical on both sides. A transcript UUID can exist on both
+sides with different content when a session was continued in the profile
+after an un-share, and a project's `memory/MEMORY.md` is one fixed name
+whose two copies are usually both real. In both cases the profile's copy
+vanished silently, and there is no way to tell afterwards what was lost.
+
+The merge now drops the profile's copy only when both files are
+byte-identical. A differing copy is moved to
+`<backup>/history-conflicts/<profile>/<run>/<item>/<relative path>`: the
+shared copy is never overwritten, the profile's copy is never lost, and
+the launch names the directory it was parked in. `--purge` mentions the
+directory when it exists, since it lives inside the backup dir that purge
+removes.
+
+diff --git a/src/claude_swap/session.py b/src/claude_swap/session.py
+index e41dbf43b666afa88c02c9560400ff761bbd9b59..8f741fb382f56a66bcf85348e3e8fb17f626eaeb 100644
+--- a/src/claude_swap/session.py
++++ b/src/claude_swap/session.py
+@@ -36,6 +36,7 @@ session-aware guards); it receives a ``ClaudeAccountSwitcher`` instance.
+ 
+ from __future__ import annotations
+ 
++import filecmp
+ import hashlib
+ import json
+ import os
+@@ -93,6 +94,13 @@ HISTORY_ITEMS = (
+ # re-syncs only ever remove cswap-managed links/copies, never user data).
+ SHARE_MANIFEST = ".cswap-shared.json"
+ 
++# Where a history merge parks a profile file whose shared counterpart already
++# exists with different content: <backup>/history-conflicts/<profile>/<run>/.
++# Same-named files are not duplicates by construction — a transcript UUID
++# can straddle an un-share, and memory/MEMORY.md is one fixed name per
++# project — so the losing copy is set aside, never deleted.
++HISTORY_CONFLICTS_DIRNAME = "history-conflicts"
++
+ # Deferred-invalidation marker: backup credentials changed while a session was
+ # live (we never pull credentials out from under a running claude), so the
+ # profile must be re-bootstrapped on the next non-live `cswap run` even if it
+@@ -1384,8 +1392,14 @@ class SessionManager:
+                     )
+                 )
+                 return False
++            conflicts = (
++                self.switcher.backup_dir
++                / HISTORY_CONFLICTS_DIRNAME
++                / session_dir.name
++                / time.strftime("%Y%m%dT%H%M%S")
++            )
+             try:
+-                self._merge_history_into_source(src, dest)
++                set_aside = self._merge_history_into_source(src, dest, conflicts)
+             except OSError as e:
+                 self._logger.warning(
+                     f"Could not merge {dest.name} into {src}: {e}"
+@@ -1403,6 +1417,16 @@ class SessionManager:
+                     f"{src} — conversation history is now shared."
+                 )
+             )
++            if set_aside:
++                self._logger.warning(
++                    f"{set_aside} file(s) in the profile's {dest.name} differ "
++                    f"from the shared copy; kept under {conflicts}"
++                )
++                warning(
++                    f"{set_aside} file(s) in the profile's {dest.name} already "
++                    "exist in the shared history with different content. The "
++                    f"profile's copies were kept under {conflicts}."
++                )
+         if not src.exists():
+             # Fresh ~/.claude (or first run): seed an empty share target so
+             # the generic loop below has something to link.
+@@ -1421,15 +1445,22 @@ class SessionManager:
+         return True
+ 
+     @staticmethod
+-    def _merge_history_into_source(src: Path, dest: Path) -> None:
++    def _merge_history_into_source(src: Path, dest: Path, conflicts: Path) -> int:
+         """Move the profile's own history at ``dest`` into ``src``.
+ 
+-        Directories merge file-by-file (transcript filenames are UUIDs, so
+-        collisions mean identical sessions — first writer wins and the
+-        duplicate is dropped). ``history.jsonl`` merges by appending lines
+-        not already present. ``dest`` is removed once empty; any failure
+-        raises OSError and leaves remaining files in place for the next try.
++        Directories merge file-by-file. A file that already exists under
++        ``src`` is dropped only when both copies are byte-identical; a
++        differing copy is moved to ``conflicts/<dest.name>/<relative path>``
++        instead, so the shared copy is never overwritten and the profile's
++        copy is never lost. Transcript filenames are UUIDs, but a UUID can
++        exist on both sides with different content (a session continued in
++        the profile after an un-share), and ``memory/MEMORY.md`` is one fixed
++        name per project. ``history.jsonl`` merges by appending lines not
++        already present. ``dest`` is removed once empty; any failure raises
++        OSError and leaves remaining files in place for the next try.
++        Returns how many files were set aside.
+         """
++        set_aside = 0
+         if dest.is_dir():
+             _mkdir_private(src)
+             for path in sorted(dest.rglob("*"), reverse=True):
+@@ -1439,8 +1470,11 @@ class SessionManager:
+                     path.rmdir()  # children already moved (reverse walk)
+                     continue
+                 if target.exists():
+-                    path.unlink()
+-                    continue
++                    if filecmp.cmp(str(path), str(target), shallow=False):
++                        path.unlink()
++                        continue
++                    target = conflicts / dest.name / rel
++                    set_aside += 1
+                 _mkdir_private(target.parent)
+                 shutil.move(str(path), str(target))
+             dest.rmdir()
+@@ -1460,6 +1494,7 @@ class SessionManager:
+                 with src.open("a", encoding="utf-8") as f:
+                     f.write("\n".join(lines) + "\n")
+             dest.unlink()
++        return set_aside
+ 
+     @staticmethod
+     def _read_manifest(manifest_path: Path) -> list[str]:
+diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
+index 8c64df8de23b608705e7c6957cc57502ce28d180..a51adda7d31409da587101089e5b60a153d5c776 100644
+--- a/src/claude_swap/switcher.py
++++ b/src/claude_swap/switcher.py
+@@ -7663,7 +7663,7 @@ class ClaudeAccountSwitcher:
+             if sessions_root.is_dir()
+             else []
+         )
+-        from claude_swap.session import scan_live_sessions
++        from claude_swap.session import HISTORY_CONFLICTS_DIRNAME, scan_live_sessions
+ 
+         live = {}
+         unreadable = {}
+@@ -7695,6 +7695,11 @@ class ClaudeAccountSwitcher:
+ 
+         warning("This will remove ALL claude-swap data from your system:")
+         print(f"  - Backup directory: {self.backup_dir}")
++        if (self.backup_dir / HISTORY_CONFLICTS_DIRNAME).is_dir():
++            print(
++                f"    (including {HISTORY_CONFLICTS_DIRNAME}/: transcripts "
++                "set aside by history sharing)"
++            )
+         if legacy_distinct and legacy.exists():
+             print(f"  - Legacy backup directory: {legacy}")
+         if self.platform == Platform.MACOS:
+diff --git a/tests/test_session.py b/tests/test_session.py
+index 01d34510b46392e46a82d872226163e10865d707..70a6649de4aa4b106aca5d7b0e8bd878df5737dc 100644
+--- a/tests/test_session.py
++++ b/tests/test_session.py
+@@ -27,6 +27,7 @@ from claude_swap.exceptions import (
+ from claude_swap.models import Platform
+ from claude_swap.paths import get_global_config_path
+ from claude_swap.session import (
++    HISTORY_CONFLICTS_DIRNAME,
+     MCP_DISPLACED_STASH,
+     MCP_MIRROR_MARKER,
+     SHARE_MANIFEST,
+@@ -1915,11 +1916,11 @@ class TestShareHistoryPosix:
+         # And the profile now links to the shared copy.
+         assert (session_dir / "projects").readlink() == merged
+ 
+-    def test_merge_collision_keeps_target(self, history_setup):
++    def test_merge_identical_collision_drops_duplicate(self, history_setup):
+         source, session_dir, mgr = history_setup
+         proj = session_dir / "projects" / "-home-user-app"
+         proj.mkdir(parents=True)
+-        (proj / "aaa.jsonl").write_text("profile-duplicate\n")
++        (proj / "aaa.jsonl").write_text("main-a\n")
+ 
+         mgr._sync_sharing(session_dir, share=True, share_history=True)
+ 
+@@ -1927,6 +1928,52 @@ class TestShareHistoryPosix:
+             source / "projects" / "-home-user-app" / "aaa.jsonl"
+         ).read_text() == "main-a\n"
+         assert (session_dir / "projects").is_symlink()
++        assert not (mgr.switcher.backup_dir / HISTORY_CONFLICTS_DIRNAME).exists()
++
++    def test_merge_differing_collision_sets_profile_copy_aside(
++        self, history_setup, capsys
++    ):
++        # Same name, different content: a transcript continued after an
++        # un-share, or a per-project memory/MEMORY.md. Neither copy may be
++        # lost, and the shared copy must not be overwritten.
++        source, session_dir, mgr = history_setup
++        proj = session_dir / "projects" / "-home-user-app"
++        (proj / "memory").mkdir(parents=True)
++        (proj / "aaa.jsonl").write_text("main-a\nprofile-continued\n")
++        (proj / "memory" / "MEMORY.md").write_text("- profile index\n")
++        (source / "projects" / "-home-user-app" / "memory").mkdir()
++        (source / "projects" / "-home-user-app" / "memory" / "MEMORY.md").write_text(
++            "- main index\n"
++        )
++
++        mgr._sync_sharing(session_dir, share=True, share_history=True)
++
++        shared = source / "projects" / "-home-user-app"
++        assert (shared / "aaa.jsonl").read_text() == "main-a\n"
++        assert (shared / "memory" / "MEMORY.md").read_text() == "- main index\n"
++        conflicts = mgr.switcher.backup_dir / HISTORY_CONFLICTS_DIRNAME / session_dir.name
++        runs = list(conflicts.iterdir())
++        assert len(runs) == 1
++        parked = runs[0] / "projects" / "-home-user-app"
++        assert (parked / "aaa.jsonl").read_text() == "main-a\nprofile-continued\n"
++        assert (parked / "memory" / "MEMORY.md").read_text() == "- profile index\n"
++        assert (session_dir / "projects").readlink() == source / "projects"
++        out = capsys.readouterr().out
++        assert "2 file(s)" in out
++        assert str(runs[0]) in out
++
++    def test_merge_without_collisions_reports_nothing_set_aside(
++        self, history_setup, capsys
++    ):
++        source, session_dir, mgr = history_setup
++        proj = session_dir / "projects" / "-home-user-app"
++        proj.mkdir(parents=True)
++        (proj / "bbb.jsonl").write_text("profile-b\n")
++
++        mgr._sync_sharing(session_dir, share=True, share_history=True)
++
++        assert "file(s)" not in capsys.readouterr().out
++        assert not (mgr.switcher.backup_dir / HISTORY_CONFLICTS_DIRNAME).exists()
+ 
+     def test_merge_deferred_while_profile_live(self, history_setup, monkeypatch):
+         source, session_dir, mgr = history_setup
+diff --git a/tests/test_switcher.py b/tests/test_switcher.py
+index 58fe49ccf9563b34a2ce2d8fb4c4f26e9152e825..d2d558b055c8c57f6c5085897dc03c105f008e23 100644
+--- a/tests/test_switcher.py
++++ b/tests/test_switcher.py
+@@ -5064,6 +5064,21 @@ class TestPurgeLegacyCleanup:
+         assert str(backup_dir) in out
+         assert str(legacy) in out
+ 
++    def test_purge_prompt_mentions_history_conflicts_when_present(
++        self, temp_home: Path, monkeypatch: pytest.MonkeyPatch, capsys
++    ):
++        from claude_swap.session import HISTORY_CONFLICTS_DIRNAME
++
++        switcher, backup_dir, _legacy = self._make_switcher_then_recreate_legacy(
++            monkeypatch
++        )
++        (backup_dir / HISTORY_CONFLICTS_DIRNAME / "2-user").mkdir(parents=True)
++
++        with patch("builtins.input", return_value="n"):
++            switcher.purge()
++
++        assert f"{HISTORY_CONFLICTS_DIRNAME}/" in capsys.readouterr().out
++
+     def test_purge_prompt_omits_legacy_when_absent(
+         self, temp_home: Path, monkeypatch: pytest.MonkeyPatch, capsys
+     ):
