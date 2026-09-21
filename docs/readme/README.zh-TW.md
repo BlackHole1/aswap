@@ -1,8 +1,12 @@
+<div align="center">
+
 # aswap
 
 [English](../../README.md) | [简体中文](README.zh-CN.md) | 繁體中文 | [日本語](README.ja.md) | [한국어](README.ko.md) | [Русский](README.ru.md) | [Français](README.fr.md) | [Español](README.es.md)
 
 Claude Code 的帳號切換工具：[claude-swap](https://github.com/realiti4/claude-swap) (`cswap`) 加上一組持續維護的修正。
+
+</div>
 
 `cswap` 可以在多個 Claude 帳號之間切換，追蹤每個帳號的用量視窗，並把你切到餘量最多的帳號。aswap 提供的是同一個工具：由未經修改的上游原始碼建置，再疊加一小組可審閱的補丁，修掉上游尚未處理的問題。你得到的還是熟悉的 `cswap` 指令，只是毛邊被磨平了。
 
@@ -13,14 +17,14 @@ aswap 是 **account swap** (帳號切換) 的縮寫，這正是這個工具做�
 ## 安裝
 
 ```bash
-uv tool install aswap      # 或：pipx install aswap
+uv tool install aswap  # 或：pipx install aswap
 aswap --version
 ```
 
 `aswap` 接受 `cswap` 的全部用法，並與上游的 `cswap` 並存、互不干擾。想讓 `cswap` 這個名字也執行 aswap：
 
 ```bash
-aswap link                 # 在 aswap 旁邊建立一個 cswap 啟動器；aswap unlink 可移除
+aswap link  # 在 aswap 旁邊建立一個 cswap 啟動器；aswap unlink 可移除
 ```
 
 `aswap link` 不會覆蓋不是它建立的 `cswap`；先移除上游 (`uv tool uninstall claude-swap`)，或加 `--force`。
@@ -28,17 +32,17 @@ aswap link                 # 在 aswap 旁邊建立一個 cswap 啟動器；aswa
 ## 升級
 
 ```bash
-aswap upgrade              # 依安裝方式執行 uv tool upgrade aswap 或 pipx upgrade aswap
+aswap upgrade  # 依安裝方式執行 uv tool upgrade aswap 或 pipx upgrade aswap
 ```
 
 從原始碼建置，以及用打過補丁的版本原位取代 PyPI 的 `cswap`，見 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
 
 ## 補丁修正了什麼
 
-| 補丁                                                                                                                                    | 問題                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [跟隨活動憑證的真正擁有者](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch)                | 多個 Claude Code 程序共用 `~/.claude.json`。在 `cswap switch` 之前就已啟動的程序，記憶體裡還是原來的帳號，會把它寫回去 (實測中 Chrome 擴充功能的 native host 在切換 16 秒後就這麼做了)。於是設定裡寫著帳號 B，而憑證儲存區裡放的仍是帳號 A 的 token。上游相信這個標籤：把 A 當成閒置帳號，送出 A 早已被消耗的備份 refresh token，收到 `invalid_grant`，對 A 顯示一個假的 "re-login needed"；B 則被餵了 A 的外來 token，永遠不會從自己的備份重新整理。兩個帳號都停滯，而介面把責任算在 A 頭上。補丁把活動憑證歸屬到真正的擁有者，跨執行記住這個結論，讓另一個帳號繼續從自己的備份重新整理，並修復被誤判的備份。 |
-| [依實際安裝的發行版回報版本、檢查更新與升級](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch) | 上游把 `claude-swap` 這個發行版名寫死在版本號、PyPI 更新檢查和 `cswap upgrade` 裡。裝成 `aswap` 後會匯入即崩、每次執行都提示 claude-swap 有新版、升級時裝錯套件。補丁改為讀取已安裝的中繼資料，跟隨真正提供這份程式碼的發行版。                                                                                                                                                                                                                                                                                                                                                                                |
+| 補丁                                                                                                                     | 問題                                                                                                                                                              |
+| ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [跟隨活動憑證的真正擁有者](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | `~/.claude.json` 過期後可能寫著帳號 B，而鑰匙圈裡是帳號 A 的 token。上游據此誤報 A 需要重新登入，B 也不再重新整理。補丁依憑證的真正擁有者判斷，並跨執行記住結果。 |
+| [跟隨實際安裝的發行版](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)        | 版本號、更新檢查和 `upgrade` 寫死了 `claude-swap`，裝成 `aswap` 後全部失效。補丁改為跟隨真正提供程式碼的發行版。                                                  |
 
 每個補丁都是一次提交，提交訊息說明上游的問題。完整清單見 [patches/.patches](../../patches/.patches)。
 

@@ -54,7 +54,7 @@ The tooling is `scripts/patches.ts` (bun), reachable as `bun run patches <cmd>`.
 
 Base commit: `git ls-files --stage cswap`. Patched commits: `git -C cswap log <base>..HEAD`.
 
-Releases: bump `version` in `package.json`, commit, `gh release create v<version> --generate-notes`; the tag runs `.github/workflows/publish.yml` (PyPI trusted publishing for `aswap`). `packaging/aswap/src/aswap/cli.py` is the `aswap` wrapper (`link` / `unlink`); cswap behavior changes are patches, never wrapper code.
+Releases: `gh workflow run publish.yml` (optionally `-f bump=minor|major` or `-f version=X.Y.Z`); the workflow computes the version from tags, publishes `aswap` to PyPI and creates the tag and release. No version lives in the tree. `packaging/aswap/src/aswap/cli.py` is the `aswap` wrapper (`link` / `unlink`); cswap behavior changes are patches, never wrapper code.
 
 ## Workflows
 

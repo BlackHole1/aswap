@@ -49,7 +49,25 @@ if (Bun.spawnSync(["git", "status", "--porcelain", "--untracked-files=no"], { cw
   fail("cswap/ has uncommitted changes; commit them as a patch or discard them before building");
 }
 
-const version = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8")).version as string;
+/** ASWAP_VERSION (set by the publish workflow), else derived from the latest
+ *  v* tag: the tag itself on a tagged commit, otherwise a PEP 440 dev version
+ *  of the next patch release (v0.1.0 + 3 commits -> 0.1.1.dev3). */
+function resolveVersion(): string {
+  if (process.env.ASWAP_VERSION) return process.env.ASWAP_VERSION;
+  const p = Bun.spawnSync(["git", "describe", "--tags", "--match", "v*", "--long"], {
+    cwd: ROOT,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const m = new TextDecoder()
+    .decode(p.stdout)
+    .trim()
+    .match(/^v(\d+)\.(\d+)\.(\d+)-(\d+)-g[0-9a-f]+$/);
+  if (!m) return "0.0.0.dev0";
+  const [, major, minor, patch, ahead] = m;
+  return Number(ahead) === 0 ? `${major}.${minor}.${patch}` : `${major}.${minor}.${Number(patch) + 1}.dev${ahead}`;
+}
+const version = resolveVersion();
 const upstreamToml = readFileSync(path.join(SUB, "pyproject.toml"), "utf8");
 const upstreamVersion = upstreamToml.match(/^version = "([^"]+)"$/m)?.[1] ?? "unknown";
 const patchCount = readFileSync(path.join(ROOT, "patches", ".patches"), "utf8")

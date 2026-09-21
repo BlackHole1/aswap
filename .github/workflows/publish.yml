@@ -1,14 +1,31 @@
 name: publish
 
-# Tag v<version> (matching package.json) to build the wheels, publish aswap to
-# PyPI through trusted publishing, and attach both wheels to the GitHub release.
+# Manual release, no code change needed: run this workflow, optionally with an
+# exact version, otherwise the latest v* tag is bumped (patch by default). It
+# checks the tree, builds both wheels, publishes aswap to PyPI through trusted
+# publishing, then creates the tag and GitHub release with the wheels attached.
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact version to release (for example 0.2.0). Leave empty to bump the latest tag.
+        required: false
+        type: string
+        default: ""
+      bump:
+        description: Segment to bump when version is empty.
+        required: true
+        type: choice
+        options: [patch, minor, major]
+        default: patch
 
 permissions:
   contents: write
   id-token: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -18,21 +35,32 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: true
+          fetch-depth: 0
+          fetch-tags: true
           persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: .bun-version
       - uses: astral-sh/setup-uv@v5
-      - name: Tag matches package.json
-        run: |
-          v=$(node -p "require('./package.json').version")
-          [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} != package.json v$v"; exit 1; }
       - run: bun install --frozen-lockfile
+      - name: Compute version
+        id: version
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
+          VERSION_BUMP: ${{ inputs.bump }}
+        run: bun scripts/release-version.ts
+      - run: bun run patches verify
       - run: bun run patches apply
-      - run: bun run build
+      - run: bun run patches export --check
+      - run: bun run test
+      - name: Build
+        env:
+          ASWAP_VERSION: ${{ steps.version.outputs.version }}
+        run: bun run build
       - name: Publish aswap to PyPI
-        run: uv publish dist/aswap-*
-      - name: Attach wheels to the release
+        run: uv publish --check-url https://pypi.org/simple/aswap/ dist/aswap-*
+      - name: Tag and release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${GITHUB_REF_NAME}" dist/*.whl dist/*.tar.gz --clobber
+          TAG: ${{ steps.version.outputs.tag }}
+        run: gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --generate-notes dist/*.whl dist/*.tar.gz

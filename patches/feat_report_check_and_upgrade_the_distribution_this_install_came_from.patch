@@ -85,7 +85,7 @@ index 0000000000000000000000000000000000000000..325693364b45e28252029d2f15440cb7
 +    name = distribution_name()
 +    return UPSTREAM_COMMAND if name == UPSTREAM_DISTRIBUTION else name
 diff --git a/src/claude_swap/update_check.py b/src/claude_swap/update_check.py
-index f30239ca90cb10647863ae3b29da29a523eb1719..fec26ed6c32a915d8effa3be87a23cb07328d98a 100644
+index f30239ca90cb10647863ae3b29da29a523eb1719..758b24cc03bf623ab143b9c3956091bd9d31ee72 100644
 --- a/src/claude_swap/update_check.py
 +++ b/src/claude_swap/update_check.py
 @@ -1,4 +1,5 @@
@@ -95,7 +95,7 @@ index f30239ca90cb10647863ae3b29da29a523eb1719..fec26ed6c32a915d8effa3be87a23cb0
  
  from __future__ import annotations
  
-@@ -12,10 +13,15 @@ from pathlib import Path
+@@ -12,10 +13,29 @@ from pathlib import Path
  from typing import NamedTuple
  
  from claude_swap.cache import CACHE_DIR, MISSING, read_cache, write_cache
@@ -109,10 +109,32 @@ index f30239ca90cb10647863ae3b29da29a523eb1719..fec26ed6c32a915d8effa3be87a23cb0
 +
 +def _pypi_url() -> str:
 +    return f"https://pypi.org/pypi/{distribution_name()}/json"
++
++
++def _cache_path() -> Path:
++    """The cache is shared by every install in the same backup root, and an
++    upstream install and a repackaging fetch DIFFERENT projects' versions: one
++    file for both would hand aswap claude-swap's latest release (measured:
++    "a newer version of aswap is available (0.26.0)" against 0.1.0). Upstream
++    keeps the historical file name; a repackaging gets its own."""
++    from claude_swap.distribution import UPSTREAM_DISTRIBUTION
++
++    name = distribution_name()
++    if name == UPSTREAM_DISTRIBUTION:
++        return CACHE_PATH
++    return CACHE_PATH.with_name(f"update_check-{name}.json")
  
  _VERSION_RE = re.compile(
      r"(\d+(?:\.\d+)*)(?:[-_.]?(alpha|beta|preview|pre|rc|a|b|c)[-_.]?(\d+)?)?",
-@@ -104,7 +110,7 @@ def check_for_update(current_version: str) -> str | None:
+@@ -98,13 +118,14 @@ def check_for_update(current_version: str) -> str | None:
+         latest_version = None
+ 
+         # Try reading cache
+-        cached_data = read_cache(CACHE_PATH, CACHE_TTL)
++        cache_path = _cache_path()
++        cached_data = read_cache(cache_path, CACHE_TTL)
+         if cached_data is not MISSING:
+             latest_version = cached_data
          else:
              # Fetch from PyPI
              try:
@@ -121,7 +143,12 @@ index f30239ca90cb10647863ae3b29da29a523eb1719..fec26ed6c32a915d8effa3be87a23cb0
                  with urllib.request.urlopen(req, timeout=2) as resp:
                      data = json.loads(resp.read().decode())
                  latest_version = data["info"]["version"]
-@@ -116,21 +122,22 @@ def check_for_update(current_version: str) -> str | None:
+@@ -112,25 +133,26 @@ def check_for_update(current_version: str) -> str | None:
+                 latest_version = None
+ 
+             # Write cache regardless of success/failure
+-            write_cache(CACHE_PATH, latest_version)
++            write_cache(cache_path, latest_version)
  
          if latest_version and _is_newer(latest_version, current_version):
              method = _detect_install_method()
@@ -149,7 +176,7 @@ index f30239ca90cb10647863ae3b29da29a523eb1719..fec26ed6c32a915d8effa3be87a23cb0
                  f"You are using {current_version}. {hint}"
              )
          return None
-@@ -147,9 +154,10 @@ def run_self_upgrade() -> int:
+@@ -147,9 +169,10 @@ def run_self_upgrade() -> int:
      from claude_swap.printer import accent, error
  
      method = _detect_install_method()
@@ -162,7 +189,7 @@ index f30239ca90cb10647863ae3b29da29a523eb1719..fec26ed6c32a915d8effa3be87a23cb0
      }
      cmd = commands.get(method or "")
      if cmd is None:
-@@ -158,9 +166,9 @@ def run_self_upgrade() -> int:
+@@ -158,9 +181,9 @@ def run_self_upgrade() -> int:
              f"  sys.prefix:     {sys.prefix}\n"
              f"  sys.executable: {sys.executable}\n"
              "To upgrade manually, run one of:\n"
@@ -175,7 +202,7 @@ index f30239ca90cb10647863ae3b29da29a523eb1719..fec26ed6c32a915d8effa3be87a23cb0
              "If you installed with `pip install -e .`, use `git pull` instead."
          )
          return 1
-@@ -170,7 +178,7 @@ def run_self_upgrade() -> int:
+@@ -170,7 +193,7 @@ def run_self_upgrade() -> int:
      # though the package itself updates. cswap exits right after this, which
      # releases the lock, so the user can just run the command themselves.
      if sys.platform == "win32":
@@ -186,10 +213,10 @@ index f30239ca90cb10647863ae3b29da29a523eb1719..fec26ed6c32a915d8effa3be87a23cb0
      try:
 diff --git a/tests/test_distribution.py b/tests/test_distribution.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..7fa51264072ea5feeeb24a64acb07592244dc164
+index 0000000000000000000000000000000000000000..9a95b7c0694710a96f13dc1484f85cb4f312646a
 --- /dev/null
 +++ b/tests/test_distribution.py
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,83 @@
 +"""The code reports, checks, and upgrades the distribution it was installed
 +from: upstream ``claude-swap`` or a repackaging such as ``aswap``."""
 +
@@ -251,6 +278,19 @@ index 0000000000000000000000000000000000000000..7fa51264072ea5feeeb24a64acb07592
 +        assert "A newer version of aswap is available (9.9.9)" in msg
 +        assert "`aswap upgrade`" in msg
 +        assert "claude-swap" not in msg and "cswap" not in msg
++
++    def test_a_repackaging_never_reads_upstreams_cached_version(self, monkeypatch, tmp_path):
++        """Both installs share the cache directory; upstream's cached latest
++        (0.26.0) must not be served to aswap (0.1.0) as an available update."""
++        from claude_swap.cache import write_cache
++
++        self._as_aswap(monkeypatch, tmp_path)
++        write_cache(tmp_path / "update_check.json", "0.26.0")  # upstream's file
++        with patch("claude_swap.update_check.urllib.request.urlopen",
++                   side_effect=OSError("offline")):
++            assert update_check.check_for_update("0.1.0") is None
++        assert (tmp_path / "update_check-aswap.json").exists()
++        assert update_check._cache_path().name == "update_check-aswap.json"
 +
 +    def test_self_upgrade_targets_the_distribution(self, monkeypatch, tmp_path):
 +        self._as_aswap(monkeypatch, tmp_path)

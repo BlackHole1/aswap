@@ -59,18 +59,17 @@ The complete workflow, including conflict resolution and upstream updates, is in
 
 `export` rewrites a patch file only when its diff or message changed. Differences limited to `index <blob>..<blob>` lines are ignored, so adding, removing, disabling or reordering patches never touches the other files. The one exception is a conflict: a patch that had to be adjusted to apply is, by definition, a changed patch.
 
-## Versioning and releases
+## Releases
 
-`package.json` holds the aswap version; `bun run build` stamps it into the aswap wheel (the wheel's pyproject is generated from cswap's at build time, see `scripts/build.ts`). The patched claude-swap wheel keeps upstream's version.
-
-To release:
+Nothing in the tree carries the aswap version; git tags do. To release, run the publish workflow:
 
 ```bash
-# bump "version" in package.json, commit, then
-gh release create v0.2.0 --generate-notes
+gh workflow run publish.yml                 # bump the patch segment of the latest v* tag
+gh workflow run publish.yml -f bump=minor   # or minor / major
+gh workflow run publish.yml -f version=1.0.0
 ```
 
-The tag triggers `.github/workflows/publish.yml`: it applies the series, builds both wheels, publishes `aswap` to PyPI through trusted publishing (PyPI project `aswap`, GitHub environment `pypi`), and attaches the wheels to the release. The tag must equal `v` plus the package.json version or the workflow stops.
+`.github/workflows/publish.yml` applies the series, runs the checks and tests, builds both wheels with the computed version, publishes `aswap` to PyPI through trusted publishing (PyPI project `aswap`, GitHub environment `pypi`), then creates the tag and the GitHub release with the wheels attached. A local `bun run build` stamps the wheel with the latest tag, or `X.Y.(Z+1).devN` when the tree is ahead of it; set `ASWAP_VERSION` to override. The patched claude-swap wheel keeps upstream's version.
 
 ## The aswap wrapper
 
