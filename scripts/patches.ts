@@ -59,6 +59,14 @@ function gitTry(args: string[], cwd = SUB): Run {
   return run(["git", ...args], cwd);
 }
 
+/** `git am` needs a committer; CI runners have none configured. The patch's
+ *  author is preserved either way, so a placeholder committer is harmless. */
+function ensureCommitterIdentity(): void {
+  const has = (key: string) => gitTry(["config", key], ROOT).stdout.trim().length > 0;
+  if (!process.env.GIT_COMMITTER_NAME && !has("user.name")) process.env.GIT_COMMITTER_NAME = "aswap patches";
+  if (!process.env.GIT_COMMITTER_EMAIL && !has("user.email")) process.env.GIT_COMMITTER_EMAIL = "patches@aswap.invalid";
+}
+
 function fail(msg: string): never {
   console.error(`error: ${msg}`);
   process.exit(1);
@@ -401,6 +409,7 @@ function cmdHelp(): void {
 }
 
 const [cmd = "help", ...rest] = process.argv.slice(2);
+ensureCommitterIdentity();
 switch (cmd) {
   case "apply":
     cmdApply(rest);
