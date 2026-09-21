@@ -43,10 +43,9 @@ any window is open and lists the profiles it removes, the same way both
 treat session profiles.
 
 Opening an account that the stock window is signed in as right now is
-allowed but warned about: both windows then list the same local
-sessions, while a session runs only inside the window that started it
-(the other renders the transcript as it was when opened), and a message
-sent from both forks it.
+allowed but warned about: both windows then work on the same session
+files, each cached in its own memory, so nothing syncs live, their
+writes overwrite each other, and only a reload rereads from disk.
 
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
 index 6557093b52dff125ca65ed421b0d759b03fad6d1..4bd5417a458917c60cb74cd662ac8a3c0a8c245c 100644
@@ -168,10 +167,10 @@ index 6557093b52dff125ca65ed421b0d759b03fad6d1..4bd5417a458917c60cb74cd662ac8a3c
  
 diff --git a/src/claude_swap/desktop.py b/src/claude_swap/desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..9e867ecedcfe804a545c6a0bf0fd877483a373d8
+index 0000000000000000000000000000000000000000..64bae8d9dcb92611aa12595da005ffe7068a55eb
 --- /dev/null
 +++ b/src/claude_swap/desktop.py
-@@ -0,0 +1,606 @@
+@@ -0,0 +1,604 @@
 +"""Claude Desktop, one window per stored account.
 +
 +Claude Desktop holds one login per profile: to use a second account the
@@ -562,13 +561,13 @@ index 0000000000000000000000000000000000000000..9e867ecedcfe804a545c6a0bf0fd8774
 +        return str(data.get("accounts", {}).get(number, {}).get("uuid", "") or "")
 +
 +    def warn_if_stock_login(self, number: str, label: str) -> bool:
-+        """Say so when the account is also the login of a stock Claude window
++        """Say so when the account is also signed in in a stock Claude window
 +        that is open right now.
 +
-+        Both windows then list the same local sessions (shared state), but a
-+        session runs inside the window that started it; the other window
-+        only renders the transcript as it was when opened, and a message
-+        sent from there forks the session. Returns True when it warned.
++        Both windows then share the same session files, but each keeps its
++        own copy in memory: nothing syncs live, their writes overwrite each
++        other, and only a reload (Cmd+R) rereads a window from disk. Returns
++        True when it warned.
 +        """
 +        uuid = self._account_uuid(number)
 +        if not uuid:
@@ -579,11 +578,9 @@ index 0000000000000000000000000000000000000000..9e867ecedcfe804a545c6a0bf0fd8774
 +        if not stock_instance_running(self.app(), self.platform):
 +            return False
 +        warning(
-+            f"  {label} is also the login of the stock Claude window that is "
-+            "open now. Both windows list the same local sessions, but a session "
-+            "is live only in the window that started it; the other shows a "
-+            "snapshot until the session is reopened there. Send messages from "
-+            "one window only, or the session forks."
++            f"  {label} is also signed in in the stock Claude window. Sessions "
++            "do not sync live between the two windows and their writes "
++            "overwrite each other; reload a window (Cmd+R) to reread from disk."
 +        )
 +        return True
 +
@@ -974,10 +971,10 @@ index 60d81f8758b742402a3cf4629235b784c372f585..f4f09d414f548b638ad7902323e01fd8
          assert by_key["autoswitch.threshold"]["isSet"] is False
 diff --git a/tests/test_desktop.py b/tests/test_desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..c4111421e454d222336b602f5a68b5e18dd44f35
+index 0000000000000000000000000000000000000000..e0f9523789d9de84f86955cfc1c1becfe0ba2a8b
 --- /dev/null
 +++ b/tests/test_desktop.py
-@@ -0,0 +1,600 @@
+@@ -0,0 +1,601 @@
 +"""``cswap desktop``: Claude Desktop, one window per stored account.
 +
 +Claude Desktop keeps one login per profile, and Electron honors
@@ -1378,8 +1375,9 @@ index 0000000000000000000000000000000000000000..c4111421e454d222336b602f5a68b5e1
 +
 +class TestStockLoginGuard:
 +    """Opening an account that the stock window is already signed in as
-+    gives two windows on one session list; only the starting window is
-+    live, and sending from both forks. Say so once, before the launch."""
++    gives two windows on the same session files, each cached in memory:
++    no live sync, writes overwrite each other, Cmd+R rereads. Say so once,
++    before the launch."""
 +
 +    @pytest.fixture
 +    def stock(self, tmp_path, sample_sequence_data):
@@ -1397,8 +1395,8 @@ index 0000000000000000000000000000000000000000..c4111421e454d222336b602f5a68b5e1
 +        with patch.object(desktop, "stock_instance_running", return_value=True):
 +            assert manager.warn_if_stock_login("1", "1. account1@example.com")
 +        out = _plain(capsys.readouterr().out)
-+        assert "also the login of the stock Claude window" in out
-+        assert "forks" in out
++        assert "also signed in in the stock Claude window" in out
++        assert "do not sync live" in out and "Cmd+R" in out
 +
 +    def test_quiet_for_another_account(self, manager, stock, capsys):
 +        with patch.object(desktop, "stock_instance_running", return_value=True):
@@ -1423,7 +1421,7 @@ index 0000000000000000000000000000000000000000..c4111421e454d222336b602f5a68b5e1
 +            assert manager.open(["1"]) == 0
 +        launch.assert_called_once()
 +        out = _plain(capsys.readouterr().out)
-+        assert out.index("also the login") < out.index("opening")
++        assert out.index("also signed in") < out.index("opening")
 +
 +    def test_stock_instance_is_the_binary_without_a_profile_flag(self, tmp_path):
 +        app = Path("/Applications/Claude.app")
