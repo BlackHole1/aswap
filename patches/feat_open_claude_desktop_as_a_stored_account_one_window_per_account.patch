@@ -42,6 +42,12 @@ otherwise deletes the profile with the slot, and `purge` refuses while
 any window is open and lists the profiles it removes, the same way both
 treat session profiles.
 
+Opening an account that the stock window is signed in as right now is
+allowed but warned about: both windows then list the same local
+sessions, while a session runs only inside the window that started it
+(the other renders the transcript as it was when opened), and a message
+sent from both forks it.
+
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
 index 6557093b52dff125ca65ed421b0d759b03fad6d1..4bd5417a458917c60cb74cd662ac8a3c0a8c245c 100644
 --- a/src/claude_swap/cli.py
@@ -162,10 +168,10 @@ index 6557093b52dff125ca65ed421b0d759b03fad6d1..4bd5417a458917c60cb74cd662ac8a3c
  
 diff --git a/src/claude_swap/desktop.py b/src/claude_swap/desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..b4a86cf7d810907fad192cb5d30279653ebc941b
+index 0000000000000000000000000000000000000000..9e867ecedcfe804a545c6a0bf0fd877483a373d8
 --- /dev/null
 +++ b/src/claude_swap/desktop.py
-@@ -0,0 +1,543 @@
+@@ -0,0 +1,606 @@
 +"""Claude Desktop, one window per stored account.
 +
 +Claude Desktop holds one login per profile: to use a second account the
@@ -194,6 +200,7 @@ index 0000000000000000000000000000000000000000..b4a86cf7d810907fad192cb5d3027965
 +
 +from __future__ import annotations
 +
++import json
 +import os
 +import re
 +import shutil
@@ -206,7 +213,7 @@ index 0000000000000000000000000000000000000000..b4a86cf7d810907fad192cb5d3027965
 +
 +from claude_swap.exceptions import AccountNotFoundError, ConfigError, SessionError
 +from claude_swap.models import Platform
-+from claude_swap.printer import accent, bold_accent, dimmed, error, muted
++from claude_swap.printer import accent, bold_accent, dimmed, error, muted, warning
 +from claude_swap.session import slugify_email
 +
 +if TYPE_CHECKING:
@@ -298,6 +305,37 @@ index 0000000000000000000000000000000000000000..b4a86cf7d810907fad192cb5d3027965
 +    "local-agent-mode-sessions",
 +    "spaces-present",
 +)
++
++
++def stock_account_uuid(stock_dir: Path) -> str | None:
++    """The account the stock profile last signed in as, from its
++    ``config.json`` (``lastKnownAccountUuid``, the same UUID cswap stores
++    for an account); None when unknown."""
++    try:
++        data = json.loads((stock_dir / "config.json").read_text(encoding="utf-8"))
++    except (OSError, ValueError):
++        return None
++    value = data.get("lastKnownAccountUuid") if isinstance(data, dict) else None
++    return value if isinstance(value, str) and value else None
++
++
++def stock_instance_running(app: Path, platform: Platform | None = None) -> bool:
++    """Is Claude Desktop open on the stock profile: the app's own binary
++    started with no ``--user-data-dir``? Best effort, POSIX only."""
++    platform = platform or Platform.detect()
++    if platform == Platform.WINDOWS:
++        return False
++    try:
++        proc = subprocess.run(
++            ["ps", "-axo", "command="], capture_output=True, text=True, timeout=10,
++        )
++    except (OSError, subprocess.TimeoutExpired):
++        return False
++    prefix = str(app)
++    for line in proc.stdout.splitlines():
++        if line.startswith(prefix) and USER_DATA_FLAG not in line:
++            return True
++    return False
 +
 +
 +def _user_data_arg(data_dir: Path) -> str:
@@ -503,12 +541,12 @@ index 0000000000000000000000000000000000000000..b4a86cf7d810907fad192cb5d3027965
 +            ))
 +        return rows
 +
-+    def _targets(self, identifiers: list[str], all_accounts: bool) -> list[tuple[str, str]]:
++    def _targets(self, identifiers: list[str], all_accounts: bool) -> list[tuple[str, str] | None]:
 +        """(number, email) per requested account; unknown ones are reported
 +        and skipped so the rest still open."""
 +        if all_accounts:
 +            return [(p.number, p.email) for p in self.profiles()]
-+        targets = []
++        targets: list[tuple[str, str] | None] = []
 +        for ident in identifiers:
 +            try:
 +                number, email, _ = self.switcher.resolve_account(ident)
@@ -518,6 +556,36 @@ index 0000000000000000000000000000000000000000..b4a86cf7d810907fad192cb5d3027965
 +                continue
 +            targets.append((number, email))
 +        return targets
++
++    def _account_uuid(self, number: str) -> str:
++        data = self.switcher._get_sequence_data() or {}
++        return str(data.get("accounts", {}).get(number, {}).get("uuid", "") or "")
++
++    def warn_if_stock_login(self, number: str, label: str) -> bool:
++        """Say so when the account is also the login of a stock Claude window
++        that is open right now.
++
++        Both windows then list the same local sessions (shared state), but a
++        session runs inside the window that started it; the other window
++        only renders the transcript as it was when opened, and a message
++        sent from there forks the session. Returns True when it warned.
++        """
++        uuid = self._account_uuid(number)
++        if not uuid:
++            return False
++        stock = default_user_data_dir(self.platform)
++        if stock_account_uuid(stock) != uuid:
++            return False
++        if not stock_instance_running(self.app(), self.platform):
++            return False
++        warning(
++            f"  {label} is also the login of the stock Claude window that is "
++            "open now. Both windows list the same local sessions, but a session "
++            "is live only in the window that started it; the other shows a "
++            "snapshot until the session is reopened there. Send messages from "
++            "one window only, or the session forks."
++        )
++        return True
 +
 +    # -- commands ----------------------------------------------------------
 +
@@ -545,6 +613,7 @@ index 0000000000000000000000000000000000000000..b4a86cf7d810907fad192cb5d3027965
 +            first_time = not data_dir.is_dir()
 +            self._mkdir_private(data_dir)
 +            self.sync_shared_state(data_dir)
++            self.warn_if_stock_login(number, label)
 +            try:
 +                launch(app, data_dir, self.platform)
 +            except SessionError as exc:
@@ -905,10 +974,10 @@ index 60d81f8758b742402a3cf4629235b784c372f585..f4f09d414f548b638ad7902323e01fd8
          assert by_key["autoswitch.threshold"]["isSet"] is False
 diff --git a/tests/test_desktop.py b/tests/test_desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..72b70555e4f9037fad545f5fa6e59dad7efd83a2
+index 0000000000000000000000000000000000000000..c4111421e454d222336b602f5a68b5e18dd44f35
 --- /dev/null
 +++ b/tests/test_desktop.py
-@@ -0,0 +1,530 @@
+@@ -0,0 +1,600 @@
 +"""``cswap desktop``: Claude Desktop, one window per stored account.
 +
 +Claude Desktop keeps one login per profile, and Electron honors
@@ -1305,6 +1374,76 @@ index 0000000000000000000000000000000000000000..72b70555e4f9037fad545f5fa6e59dad
 +        assert desktop.default_user_data_dir(Platform.LINUX) == tmp_path / "cfg" / "Claude"
 +        monkeypatch.setenv("XDG_CONFIG_HOME", "")
 +        assert desktop.default_user_data_dir(Platform.LINUX) == home / ".config" / "Claude"
++
++
++class TestStockLoginGuard:
++    """Opening an account that the stock window is already signed in as
++    gives two windows on one session list; only the starting window is
++    live, and sending from both forks. Say so once, before the launch."""
++
++    @pytest.fixture
++    def stock(self, tmp_path, sample_sequence_data):
++        stock = tmp_path / "Application Support" / "Claude"
++        stock.mkdir(parents=True)
++        (stock / "config.json").write_text(json.dumps({
++            "lastKnownAccountUuid": sample_sequence_data["accounts"]["1"]["uuid"],
++        }))
++        with patch.object(desktop, "default_user_data_dir", return_value=stock):
++            yield stock
++
++    def test_warns_for_the_stock_login_while_its_window_is_open(
++        self, manager, stock, capsys
++    ):
++        with patch.object(desktop, "stock_instance_running", return_value=True):
++            assert manager.warn_if_stock_login("1", "1. account1@example.com")
++        out = _plain(capsys.readouterr().out)
++        assert "also the login of the stock Claude window" in out
++        assert "forks" in out
++
++    def test_quiet_for_another_account(self, manager, stock, capsys):
++        with patch.object(desktop, "stock_instance_running", return_value=True):
++            assert not manager.warn_if_stock_login("2", "2. account2@example.com")
++        assert capsys.readouterr().out == ""
++
++    def test_quiet_when_the_stock_window_is_closed(self, manager, stock, capsys):
++        with patch.object(desktop, "stock_instance_running", return_value=False):
++            assert not manager.warn_if_stock_login("1", "1. account1@example.com")
++        assert capsys.readouterr().out == ""
++
++    def test_quiet_without_a_stock_config(self, manager, stock, capsys):
++        (stock / "config.json").unlink()
++        with patch.object(desktop, "stock_instance_running", return_value=True):
++            assert not manager.warn_if_stock_login("1", "1. account1@example.com")
++        assert capsys.readouterr().out == ""
++
++    def test_open_warns_before_launch(self, manager, stock, capsys):
++        with patch.object(desktop, "running_pids", return_value=[]), \
++             patch.object(desktop, "stock_instance_running", return_value=True), \
++             patch.object(desktop, "launch") as launch:
++            assert manager.open(["1"]) == 0
++        launch.assert_called_once()
++        out = _plain(capsys.readouterr().out)
++        assert out.index("also the login") < out.index("opening")
++
++    def test_stock_instance_is_the_binary_without_a_profile_flag(self, tmp_path):
++        app = Path("/Applications/Claude.app")
++        both = (
++            "/Applications/Claude.app/Contents/MacOS/Claude --user-data-dir=/x/1-a\n"
++            "/Applications/Claude.app/Contents/MacOS/Claude\n"
++        )
++        with patch.object(desktop.subprocess, "run") as run:
++            run.return_value = MagicMock(stdout=both)
++            assert desktop.stock_instance_running(app, Platform.MACOS)
++            run.return_value = MagicMock(stdout=both.splitlines()[0] + "\n")
++            assert not desktop.stock_instance_running(app, Platform.MACOS)
++        assert run.call_args.args[0][:2] == ["ps", "-axo"]
++
++    def test_stock_uuid_reads_config_json(self, tmp_path):
++        assert desktop.stock_account_uuid(tmp_path) is None
++        (tmp_path / "config.json").write_text("not json")
++        assert desktop.stock_account_uuid(tmp_path) is None
++        (tmp_path / "config.json").write_text(json.dumps({"lastKnownAccountUuid": "u-1"}))
++        assert desktop.stock_account_uuid(tmp_path) == "u-1"
 +
 +
 +class TestLifecycle:
