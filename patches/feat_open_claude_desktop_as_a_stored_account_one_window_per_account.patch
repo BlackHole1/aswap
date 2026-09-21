@@ -167,10 +167,10 @@ index 6557093b52dff125ca65ed421b0d759b03fad6d1..4bd5417a458917c60cb74cd662ac8a3c
  
 diff --git a/src/claude_swap/desktop.py b/src/claude_swap/desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..e44e61db5bb77ec3a6a3e80d755e85f0ceda3df6
+index 0000000000000000000000000000000000000000..a9003891dd206bde6f78609523c467731b922137
 --- /dev/null
 +++ b/src/claude_swap/desktop.py
-@@ -0,0 +1,605 @@
+@@ -0,0 +1,604 @@
 +"""Claude Desktop, one window per stored account.
 +
 +Claude Desktop holds one login per profile: to use a second account the
@@ -560,7 +560,7 @@ index 0000000000000000000000000000000000000000..e44e61db5bb77ec3a6a3e80d755e85f0
 +        data = self.switcher._get_sequence_data() or {}
 +        return str(data.get("accounts", {}).get(number, {}).get("uuid", "") or "")
 +
-+    def warn_if_stock_login(self, number: str, label: str) -> bool:
++    def warn_if_stock_login(self, number: str) -> bool:
 +        """Say so when the account is also signed in in a stock Claude window
 +        that is open right now.
 +
@@ -578,10 +578,9 @@ index 0000000000000000000000000000000000000000..e44e61db5bb77ec3a6a3e80d755e85f0
 +        if not stock_instance_running(self.app(), self.platform):
 +            return False
 +        warning(
-+            f"  {label} is also signed in in the stock Claude window. Sessions "
-+            "do not sync live between the two windows and their writes "
-+            "overwrite each other. To sync, reload a window (Cmd+R) to reread "
-+            "from disk."
++            "     also signed in in the stock Claude window: sessions do not "
++            "sync live between the two windows and their writes overwrite each "
++            "other. To sync, reload a window (Cmd+R) to reread from disk."
 +        )
 +        return True
 +
@@ -611,7 +610,6 @@ index 0000000000000000000000000000000000000000..e44e61db5bb77ec3a6a3e80d755e85f0
 +            first_time = not data_dir.is_dir()
 +            self._mkdir_private(data_dir)
 +            self.sync_shared_state(data_dir)
-+            self.warn_if_stock_login(number, label)
 +            try:
 +                launch(app, data_dir, self.platform)
 +            except SessionError as exc:
@@ -625,6 +623,7 @@ index 0000000000000000000000000000000000000000..e44e61db5bb77ec3a6a3e80d755e85f0
 +                )
 +            else:
 +                print(f"  {label} {accent('opening')}")
++            self.warn_if_stock_login(number)
 +        return 1 if failed else 0
 +
 +    def quit(self, identifiers: list[str], all_accounts: bool = False) -> int:
@@ -972,10 +971,10 @@ index 60d81f8758b742402a3cf4629235b784c372f585..f4f09d414f548b638ad7902323e01fd8
          assert by_key["autoswitch.threshold"]["isSet"] is False
 diff --git a/tests/test_desktop.py b/tests/test_desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..e0f9523789d9de84f86955cfc1c1becfe0ba2a8b
+index 0000000000000000000000000000000000000000..49cc3d1a23f9d4922a51bbc61043fca904fba953
 --- /dev/null
 +++ b/tests/test_desktop.py
-@@ -0,0 +1,601 @@
+@@ -0,0 +1,602 @@
 +"""``cswap desktop``: Claude Desktop, one window per stored account.
 +
 +Claude Desktop keeps one login per profile, and Electron honors
@@ -1394,35 +1393,36 @@ index 0000000000000000000000000000000000000000..e0f9523789d9de84f86955cfc1c1becf
 +        self, manager, stock, capsys
 +    ):
 +        with patch.object(desktop, "stock_instance_running", return_value=True):
-+            assert manager.warn_if_stock_login("1", "1. account1@example.com")
++            assert manager.warn_if_stock_login("1")
 +        out = _plain(capsys.readouterr().out)
 +        assert "also signed in in the stock Claude window" in out
 +        assert "do not sync live" in out and "Cmd+R" in out
 +
 +    def test_quiet_for_another_account(self, manager, stock, capsys):
 +        with patch.object(desktop, "stock_instance_running", return_value=True):
-+            assert not manager.warn_if_stock_login("2", "2. account2@example.com")
++            assert not manager.warn_if_stock_login("2")
 +        assert capsys.readouterr().out == ""
 +
 +    def test_quiet_when_the_stock_window_is_closed(self, manager, stock, capsys):
 +        with patch.object(desktop, "stock_instance_running", return_value=False):
-+            assert not manager.warn_if_stock_login("1", "1. account1@example.com")
++            assert not manager.warn_if_stock_login("1")
 +        assert capsys.readouterr().out == ""
 +
 +    def test_quiet_without_a_stock_config(self, manager, stock, capsys):
 +        (stock / "config.json").unlink()
 +        with patch.object(desktop, "stock_instance_running", return_value=True):
-+            assert not manager.warn_if_stock_login("1", "1. account1@example.com")
++            assert not manager.warn_if_stock_login("1")
 +        assert capsys.readouterr().out == ""
 +
-+    def test_open_warns_before_launch(self, manager, stock, capsys):
++    def test_open_notes_it_under_the_opening_line(self, manager, stock, capsys):
 +        with patch.object(desktop, "running_pids", return_value=[]), \
 +             patch.object(desktop, "stock_instance_running", return_value=True), \
 +             patch.object(desktop, "launch") as launch:
 +            assert manager.open(["1"]) == 0
 +        launch.assert_called_once()
 +        out = _plain(capsys.readouterr().out)
-+        assert out.index("also signed in") < out.index("opening")
++        assert out.index("opening") < out.index("also signed in")
++        assert out.count("1. account1@example.com") == 1
 +
 +    def test_stock_instance_is_the_binary_without_a_profile_flag(self, tmp_path):
 +        app = Path("/Applications/Claude.app")
