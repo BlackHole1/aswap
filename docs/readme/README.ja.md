@@ -6,6 +6,8 @@
 
 Claude Code のアカウント切り替えツール：[claude-swap](https://github.com/realiti4/claude-swap) (`cswap`) に、継続的にメンテナンスされる修正を重ねたものです。
 
+<img src="../images/cswap-list.png" alt="cswap list: two accounts with their 5h, 7d and per-model usage, then cswap switch 2" width="820">
+
 </div>
 
 `cswap` は複数の Claude アカウントを切り替え、各アカウントの利用枠を追跡し、残量が最も多いアカウントへ移せます。aswap は同じツールです。未改変の上流ソースからビルドし、上流がまだ直していない問題向けの小さなパッチを重ねています。使うコマンドはこれまで通り `cswap` です。
@@ -49,6 +51,14 @@ aswap upgrade  # インストール方法に応じて uv tool upgrade aswap ま�
 | [アカウントごとに Claude Desktop を開く](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)           | Claude Desktop はプロファイルごとに 1 つのログインしか保持しないため、別のアカウントを使うたびにログアウトして入り直す必要があります。このパッチは保存済みの各アカウントに恒久的なデスクトップ用プロファイルを与え、[guise](https://github.com/siddhjagani/guise) と同じく `--user-data-dir` でアプリを起動します。`cswap desktop 2` はアカウント 2 を専用ウィンドウで開き、一度ログインすればそのまま保持され、他のアカウントのウィンドウも並べて開いたままにできます。Code タブのローカルセッションは既定のプロファイルと共有されるため、この方法で開いたウィンドウにも同じセッションが並びます。 |
 
 各パッチは 1 コミットです。コミットメッセージが上流の問題を説明しています。全一覧は [patches/.patches](../../patches/.patches) にあります。
+
+`cswap refresh` は今すぐアカウントごとに利用状況を取得し、レート制限中のアカウントがいつ再試行できるかを示します:
+
+<img src="../images/cswap-refresh.png" alt="cswap refresh: one account refreshed, the other rate limited with the server retry time" width="820">
+
+`cswap desktop --all` は保存済みアカウントごとに Claude Desktop のウィンドウを 1 つずつ開き、それぞれがログインしたままになります:
+
+<img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
 ## 作り方
 

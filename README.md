@@ -6,6 +6,8 @@ English | [简体中文](docs/readme/README.zh-CN.md) | [繁體中文](docs/read
 
 Account swap for Claude Code: [claude-swap](https://github.com/realiti4/claude-swap) (`cswap`) with a maintained set of fixes.
 
+<img src="docs/images/cswap-list.png" alt="cswap list: two accounts with their 5h, 7d and per-model usage, then cswap switch 2" width="820">
+
 </div>
 
 `cswap` switches among several Claude accounts, tracks each account's usage, and can switch you to the account with the most remaining quota. aswap is the same tool, built from unmodified upstream source plus a small patch series for bugs upstream has not fixed. You still run `cswap`.
@@ -49,6 +51,14 @@ Building from source, and replacing an installed PyPI `cswap` with the patched b
 | [Open Claude Desktop per account](patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)          | Claude Desktop holds one login per profile, so a second account means signing the first one out and back in every time. The patch gives every stored account its own permanent desktop profile and opens the app against it with `--user-data-dir`, the way [guise](https://github.com/siddhjagani/guise) does: `cswap desktop 2` opens account 2 in its own window, signed in once and staying signed in, while the other accounts' windows stay open beside it. The Code tab's local sessions are shared with the stock profile, so a window opened this way lists the same sessions. |
 
 Each patch is a single commit. The commit message explains the upstream problem. The full list is in [patches/.patches](patches/.patches).
+
+`cswap refresh` fetches usage right now, one account at a time, and shows when a rate-limited account may retry:
+
+<img src="docs/images/cswap-refresh.png" alt="cswap refresh: one account refreshed, the other rate limited with the server retry time" width="820">
+
+`cswap desktop --all` opens one Claude Desktop window per stored account, each signed in on its own:
+
+<img src="docs/images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
 ## How it is built
 

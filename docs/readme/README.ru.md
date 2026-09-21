@@ -6,6 +6,8 @@
 
 Переключение аккаунтов для Claude Code: [claude-swap](https://github.com/realiti4/claude-swap) (`cswap`) с поддерживаемым набором исправлений.
 
+<img src="../images/cswap-list.png" alt="cswap list: two accounts with their 5h, 7d and per-model usage, then cswap switch 2" width="820">
+
 </div>
 
 `cswap` переключает несколько аккаунтов Claude, отслеживает использование каждого и может перевести вас на аккаунт с наибольшим остатком квоты. aswap - тот же инструмент: неизмененный исходный код upstream плюс небольшая серия патчей для ошибок, которые upstream еще не исправил. Вы по-прежнему запускаете `cswap`.
@@ -49,6 +51,14 @@ aswap upgrade  # uv tool upgrade aswap или pipx upgrade aswap, в завис�
 | [Открыть Claude Desktop под каждым аккаунтом](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)           | Claude Desktop хранит один логин на профиль, поэтому ради второго аккаунта приходится каждый раз выходить и входить заново. Патч даёт каждому сохранённому аккаунту постоянный профиль для настольного приложения и запускает его с `--user-data-dir`, как это делает [guise](https://github.com/siddhjagani/guise): `cswap desktop 2` открывает аккаунт 2 в отдельном окне, вход выполняется один раз и сохраняется, а окна остальных аккаунтов остаются открытыми рядом. Локальные сессии вкладки Code общие с основным профилем, так что открытое таким образом окно показывает те же сессии. |
 
 Каждый патч - один коммит. Сообщение коммита объясняет проблему upstream. Полный список в [patches/.patches](../../patches/.patches).
+
+`cswap refresh` запрашивает использование прямо сейчас, по одному аккаунту за раз, и показывает, когда аккаунт с превышенным лимитом сможет повторить запрос:
+
+<img src="../images/cswap-refresh.png" alt="cswap refresh: one account refreshed, the other rate limited with the server retry time" width="820">
+
+`cswap desktop --all` открывает по одному окну Claude Desktop на каждый сохраненный аккаунт, каждое со своим входом:
+
+<img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
 ## Как это собрано
 

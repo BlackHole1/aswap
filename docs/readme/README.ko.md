@@ -6,6 +6,8 @@
 
 Claude Code용 계정 전환 도구: [claude-swap](https://github.com/realiti4/claude-swap) (`cswap`)에 지속적으로 관리되는 수정을 더한 것입니다.
 
+<img src="../images/cswap-list.png" alt="cswap list: two accounts with their 5h, 7d and per-model usage, then cswap switch 2" width="820">
+
 </div>
 
 `cswap`은 여러 Claude 계정 사이를 전환하고, 각 계정의 사용량을 추적하며, 남은 사용량이 가장 많은 계정으로 옮겨 줍니다. aswap은 같은 도구입니다. 수정하지 않은 업스트림 소스로 빌드하고, 업스트림이 아직 고치지 않은 문제에 대한 작은 패치를 얹었습니다. 실행하는 명령은 그대로 `cswap`입니다.
@@ -49,6 +51,14 @@ aswap upgrade  # 설치 방식에 따라 uv tool upgrade aswap 또는 pipx upgra
 | [계정별로 Claude Desktop 열기](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)                 | Claude Desktop은 프로필당 로그인 하나만 유지하므로, 다른 계정을 쓰려면 매번 로그아웃했다가 다시 로그인해야 합니다. 이 패치는 저장된 각 계정에 영구적인 데스크톱 프로필을 주고 [guise](https://github.com/siddhjagani/guise)처럼 `--user-data-dir`로 앱을 실행합니다. `cswap desktop 2`는 계정 2를 전용 창에서 열고, 한 번 로그인하면 계속 유지되며, 다른 계정의 창도 나란히 열어 둘 수 있습니다. Code 탭의 로컬 세션은 기본 프로필과 공유되므로, 이렇게 연 창에도 같은 세션이 보입니다. |
 
 각 패치는 커밋 하나입니다. 커밋 메시지가 업스트림 문제를 설명합니다. 전체 목록은 [patches/.patches](../../patches/.patches)에 있습니다.
+
+`cswap refresh`는 지금 바로 계정별로 사용량을 가져오고, 속도 제한에 걸린 계정이 언제 다시 시도할 수 있는지 보여 줍니다:
+
+<img src="../images/cswap-refresh.png" alt="cswap refresh: one account refreshed, the other rate limited with the server retry time" width="820">
+
+`cswap desktop --all`은 저장된 계정마다 Claude Desktop 창을 하나씩 열고, 각 창은 따로 로그인된 상태를 유지합니다:
+
+<img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
 ## 만드는 방식
 
