@@ -77,10 +77,10 @@ session and desktop profiles.
 
 diff --git a/src/claude_swap/chrome.py b/src/claude_swap/chrome.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..c85324ba9f0a6e0e80b7054b6bdab7e9c562f8bb
+index 0000000000000000000000000000000000000000..f37c4872109f1185068e2934111dd451bbe1e853
 --- /dev/null
 +++ b/src/claude_swap/chrome.py
-@@ -0,0 +1,686 @@
+@@ -0,0 +1,803 @@
 +"""Chrome with Claude in Chrome, one browser profile per stored account.
 +
 +``cswap switch`` moves Claude Code to another account, but the Claude in
@@ -367,6 +367,42 @@ index 0000000000000000000000000000000000000000..c85324ba9f0a6e0e80b7054b6bdab7e9
 +    return removed
 +
 +
++def transplant_claude_cookies(from_profile: Path, to_profile: Path) -> int:
++    """Carry the claude.ai cookies of ``from_profile`` (an account's own
++    jar) into ``to_profile`` (a fresh, stripped copy of the stock one), so a
++    resync keeps the account's Claude login. Same machine, same Chrome, so
++    the encrypted values decrypt in either jar. Returns rows copied; 0
++    when the two jars' schemas differ (a Chrome update between the two)."""
++    copied = 0
++    for rel in COOKIE_FILES:
++        src, dest = from_profile / rel, to_profile / rel
++        if not (src.is_file() and dest.is_file()):
++            continue
++        conn = sqlite3.connect(dest)
++        try:
++            conn.execute("ATTACH DATABASE ? AS old", (str(src),))
++            main_cols = [r[1] for r in conn.execute("PRAGMA main.table_info(cookies)")]
++            old_cols = [r[1] for r in conn.execute("PRAGMA old.table_info(cookies)")]
++            if main_cols != old_cols:
++                continue
++            cur = conn.execute(
++                "INSERT OR REPLACE INTO main.cookies SELECT * FROM old.cookies "
++                "WHERE host_key = 'claude.ai' OR host_key LIKE '%.claude.ai'"
++            )
++            copied += cur.rowcount
++            conn.commit()
++        except sqlite3.Error:
++            pass
++        finally:
++            conn.close()
++    return copied
++
++
++# The extension's own storage (``chrome.storage.local``): its account uuid,
++# consent and sign-in state live here, so a resync carries it over.
++CLAUDE_EXTENSION_STATE = Path("Local Extension Settings") / CLAUDE_EXTENSION_ID
++
++
 +def _skcolor(rgb: tuple[int, int, int]) -> int:
 +    """Chrome stores colours as SkColor: 0xAARRGGBB read as a signed int32."""
 +    r, g, b = rgb
@@ -595,6 +631,46 @@ index 0000000000000000000000000000000000000000..c85324ba9f0a6e0e80b7054b6bdab7e9
 +                print(f"  {label} {accent('opening')}")
 +        return 1 if failed else 0
 +
++    def _stock_profile(self) -> Path:
++        stock = stock_user_data_dir(self.platform)
++        return stock / last_used_profile(stock)
++
++    def _copy_stock(self, src: Path, dest: Path, data_dir: Path) -> None:
++        """Copy the stock profile ``src`` into ``dest`` minus its claude.ai
++        cookies, printing what was done.
++
++        Raises:
++            ConfigError: the stock profile cannot be read (macOS Full Disk
++                Access), with the two ways out.
++            OSError: the copy failed midway.
++        """
++        if stock_instance_running(self.app(), self.platform):
++            print(dimmed(
++                "  the stock Chrome is open; the copy may miss what it "
++                "has not written to disk yet"
++            ))
++        try:
++            report = clone_profile(src, dest)
++        except PermissionError as exc:
++            raise ConfigError(
++                f"cannot read the Chrome profile at {src} ({exc}). "
++                "On macOS, give this terminal Full Disk Access (System "
++                "Settings > Privacy & Security > Full Disk Access) and "
++                "retry, or run 'cswap config set chrome.cloneStockProfile "
++                "false' to start this account from an empty profile"
++            ) from exc
++        stock = src.parent
++        if self.platform == Platform.WINDOWS and (stock / "Local State").is_file():
++            # Holds the key the cookie jar is encrypted with there.
++            shutil.copy2(stock / "Local State", data_dir / "Local State")
++        removed = strip_claude_cookies(dest)
++        note = f"  copied {report.files} file(s) from {src.name}"
++        if removed:
++            note += f", dropped {removed} claude.ai cookie(s)"
++        if report.skipped_unreadable:
++            note += f", {report.skipped_unreadable} unreadable file(s) left out"
++        print(dimmed(note))
++
 +    def prepare_profile(self, number: str, email: str, data_dir: Path) -> bool:
 +        """Create the account's profile directory for its first open.
 +
@@ -610,51 +686,92 @@ index 0000000000000000000000000000000000000000..c85324ba9f0a6e0e80b7054b6bdab7e9
 +                Full Disk Access), with the two ways out.
 +            OSError: the copy failed midway; the partial profile is removed.
 +        """
-+        alias = self._alias(number)
 +        dest = data_dir / "Default"
 +        cloned = False
 +        if self.settings().clone_stock_profile:
-+            stock = stock_user_data_dir(self.platform)
-+            src = stock / last_used_profile(stock)
++            src = self._stock_profile()
 +            if src.is_dir():
-+                if stock_instance_running(self.app(), self.platform):
-+                    print(dimmed(
-+                        "  the stock Chrome is open; the copy may miss what it "
-+                        "has not written to disk yet"
-+                    ))
 +                self._mkdir_private(data_dir)
 +                try:
-+                    report = clone_profile(src, dest)
-+                except PermissionError as exc:
-+                    shutil.rmtree(data_dir, ignore_errors=True)
-+                    raise ConfigError(
-+                        f"cannot read the Chrome profile at {src} ({exc}). "
-+                        "On macOS, give this terminal Full Disk Access (System "
-+                        "Settings > Privacy & Security > Full Disk Access) and "
-+                        "retry, or run 'cswap config set chrome.cloneStockProfile "
-+                        "false' to start this account from an empty profile"
-+                    ) from exc
-+                except OSError:
++                    self._copy_stock(src, dest, data_dir)
++                except (ConfigError, OSError):
 +                    shutil.rmtree(data_dir, ignore_errors=True)
 +                    raise
-+                if self.platform == Platform.WINDOWS and (stock / "Local State").is_file():
-+                    # Holds the key the cookie jar is encrypted with there.
-+                    shutil.copy2(stock / "Local State", data_dir / "Local State")
-+                removed = strip_claude_cookies(dest)
-+                note = f"  copied {report.files} file(s) from {src.name}"
-+                if removed:
-+                    note += f", dropped {removed} claude.ai cookie(s)"
-+                if report.skipped_unreadable:
-+                    note += f", {report.skipped_unreadable} unreadable file(s) left out"
-+                print(dimmed(note))
 +                cloned = True
 +            else:
 +                print(dimmed(
 +                    f"  no stock Chrome profile at {src}; starting from an empty one"
 +                ))
 +        self._mkdir_private(data_dir)
-+        brand_profile(dest, alias or email, profile_color(number))
++        brand_profile(dest, self._alias(number) or email, profile_color(number))
 +        return cloned
++
++    def sync(self, identifiers: list[str], all_accounts: bool = False) -> int:
++        """Resync the given accounts' profiles from the stock Chrome profile.
++
++        The stock profile is the master copy: its cookies, extensions,
++        bookmarks, logins and history replace the account profile's, the
++        same way the first open copied them. Two things are carried over
++        from the account profile so it stays itself: its claude.ai cookies
++        (the account's Claude login) and the Claude in Chrome extension's
++        own storage (the account it is signed in as). Anything else the
++        account profile changed on its own since the last copy is gone.
++
++        The copy is built beside the profile and swapped in whole, so a
++        failure leaves the old profile untouched. Refuses while the
++        account's browser is open. Returns 1 when any requested account
++        could not be synced; an account that was never opened is skipped
++        with a note.
++        """
++        targets = self._targets(identifiers, all_accounts)
++        failed = any(t is None for t in targets)
++        src = self._stock_profile()
++        if not src.is_dir():
++            error(f"  no stock Chrome profile at {src}")
++            return 1
++        for target in targets:
++            if target is None:
++                continue
++            number, email = target
++            data_dir = self.data_dir(number, email)
++            label = f"{number}. {email}"
++            current = data_dir / "Default"
++            if not current.is_dir():
++                print(f"  {label} {dimmed('never opened, nothing to sync')}")
++                continue
++            pids = running_pids(data_dir, self.platform)
++            if pids:
++                error(
++                    f"  {label}: browser open (PID {', '.join(map(str, pids))}); "
++                    f"close it first ('cswap chrome --quit {number}')"
++                )
++                failed = True
++                continue
++            staging = data_dir / f"Default.sync-{os.getpid()}"
++            retired = data_dir / f"Default.old-{os.getpid()}"
++            shutil.rmtree(staging, ignore_errors=True)
++            try:
++                self._copy_stock(src, staging, data_dir)
++                kept = transplant_claude_cookies(current, staging)
++                state = current / CLAUDE_EXTENSION_STATE
++                if state.is_dir():
++                    shutil.rmtree(staging / CLAUDE_EXTENSION_STATE, ignore_errors=True)
++                    shutil.copytree(state, staging / CLAUDE_EXTENSION_STATE)
++                brand_profile(staging, self._alias(number) or email, profile_color(number))
++                current.rename(retired)
++                staging.rename(current)
++            except (ConfigError, OSError) as exc:
++                shutil.rmtree(staging, ignore_errors=True)
++                if retired.is_dir() and not current.exists():
++                    retired.rename(current)
++                error(f"  {label}: {exc}")
++                failed = True
++                continue
++            shutil.rmtree(retired, ignore_errors=True)
++            print(
++                f"  {label} {accent('synced')} {dimmed(f'({kept} claude.ai cookie(s) and the extension state kept)')}"
++            )
++        return 1 if failed else 0
 +
 +    def _alias(self, number: str) -> str:
 +        data = self.switcher._get_sequence_data() or {}
@@ -768,10 +885,10 @@ index 0000000000000000000000000000000000000000..c85324ba9f0a6e0e80b7054b6bdab7e9
 +        if sys.platform != "win32":
 +            os.chmod(path, 0o700)
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index 4bd5417a458917c60cb74cd662ac8a3c0a8c245c..462a2d2bd050c6150e64d8a4d7eeb4e682c33e76 100644
+index 4bd5417a458917c60cb74cd662ac8a3c0a8c245c..be62ca5dc4c77c92e94100c83e5746613ef08fd9 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
-@@ -465,6 +465,109 @@ Examples:
+@@ -465,6 +465,126 @@ Examples:
          sys.exit(code)
  
  
@@ -815,7 +932,8 @@ index 4bd5417a458917c60cb74cd662ac8a3c0a8c245c..462a2d2bd050c6150e64d8a4d7eeb4e6
 +            "sites stay signed in and the extension carries over; sign in to "
 +            "that account on claude.ai and click Sign in once in the Claude "
 +            "side panel, and both stay put. Each profile is named after its "
-+            "account and gets its own window colour. "
++            "account and gets its own window colour. --sync copies the stock "
++            "profile in again later, keeping the account's login. "
 +            "Opening an account that is already open brings its browser "
 +            "forward. Several accounts can be open at once. With no account: "
 +            "list each account's browser. Exits 1 if any account could not be "
@@ -829,6 +947,7 @@ index 4bd5417a458917c60cb74cd662ac8a3c0a8c245c..462a2d2bd050c6150e64d8a4d7eeb4e6
 +  cswap chrome work personal    # by alias or email; several at once
 +  cswap chrome --all            # every account, one browser each
 +  cswap chrome --quit 2         # close account 2's browser
++  cswap chrome --sync 2         # refresh account 2's profile from the stock Chrome profile
 +  cswap config set chrome.appPath "/Applications/Brave Browser.app"   # another Chromium browser
 +  cswap config set chrome.cloneStockProfile false   # new accounts start from an empty profile
 +  cswap config set chrome.followSwitch true         # cswap switch also brings the browser forward
@@ -847,12 +966,25 @@ index 4bd5417a458917c60cb74cd662ac8a3c0a8c245c..462a2d2bd050c6150e64d8a4d7eeb4e6
 +        "--quit", action="store_true",
 +        help="Close the given accounts' browsers instead of opening them",
 +    )
++    parser.add_argument(
++        "--sync", action="store_true",
++        help=(
++            "Copy the stock Chrome profile into the given accounts' profiles "
++            "again (cookies, extensions, bookmarks, logins, history), keeping "
++            "each account's claude.ai login and the extension's account. The "
++            "stock profile is the master copy: other changes the account "
++            "profile made on its own are replaced. The browser must be closed."
++        ),
++    )
 +    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
 +    args = parser.parse_args(argv)
 +    if args.all and args.accounts:
 +        parser.error("--all takes no accounts")
-+    if args.quit and not (args.all or args.accounts):
-+        parser.error("--quit needs an account or --all")
++    if args.quit and args.sync:
++        parser.error("--quit and --sync are exclusive")
++    for flag in ("quit", "sync"):
++        if getattr(args, flag) and not (args.all or args.accounts):
++            parser.error(f"--{flag} needs an account or --all")
 +
 +    try:
 +        switcher = ClaudeAccountSwitcher(debug=args.debug)
@@ -863,6 +995,8 @@ index 4bd5417a458917c60cb74cd662ac8a3c0a8c245c..462a2d2bd050c6150e64d8a4d7eeb4e6
 +        manager = ChromeManager(switcher)
 +        if args.quit:
 +            code = manager.quit(args.accounts, args.all)
++        elif args.sync:
++            code = manager.sync(args.accounts, args.all)
 +        elif args.all or args.accounts:
 +            code = manager.open(args.accounts, args.all)
 +        else:
@@ -881,7 +1015,7 @@ index 4bd5417a458917c60cb74cd662ac8a3c0a8c245c..462a2d2bd050c6150e64d8a4d7eeb4e6
  def _unclaimed_command(argv: list[str]) -> None:
      """Handle `cswap unclaimed [--purge ID]` — inspect or drop a stash row.
  
-@@ -1133,6 +1236,9 @@ def main() -> None:
+@@ -1133,6 +1253,9 @@ def main() -> None:
      if argv and argv[0] == "desktop":
          _desktop_command(argv[1:])
          return
@@ -891,18 +1025,19 @@ index 4bd5417a458917c60cb74cd662ac8a3c0a8c245c..462a2d2bd050c6150e64d8a4d7eeb4e6
      if argv and argv[0] == "alias":
          _alias_command(argv[1:])
          return
-@@ -1177,6 +1283,10 @@ Commands:
+@@ -1177,6 +1300,11 @@ Commands:
    %(prog)s desktop --all              one Claude Desktop window per account
    %(prog)s desktop --quit <num|email> close an account's Claude Desktop window
    %(prog)s desktop                    which accounts have a window open
 +  %(prog)s chrome <num|email ...>     open Chrome as an account, own profile + extension
 +  %(prog)s chrome --all               one Chrome profile per account
 +  %(prog)s chrome --quit <num|email>  close an account's Chrome profile
++  %(prog)s chrome --sync <num|email>  recopy the stock Chrome profile, keep the login
 +  %(prog)s chrome                     which accounts have a browser open
    %(prog)s map <num|email> [path]     map a directory to an account
    %(prog)s map                        list directory mappings
    %(prog)s unmap [path]               remove a directory mapping
-@@ -1209,6 +1319,7 @@ Aliases: ls=list  rm=remove  update=upgrade""",
+@@ -1209,6 +1337,7 @@ Aliases: ls=list  rm=remove  update=upgrade""",
    %(prog)s add-token sk-ant-oat01-... --email me@example.com
    %(prog)s run 2 -- --resume                 # forward args after '--' to claude
    %(prog)s desktop 2                         # Claude Desktop signed in as account 2
@@ -910,7 +1045,7 @@ index 4bd5417a458917c60cb74cd662ac8a3c0a8c245c..462a2d2bd050c6150e64d8a4d7eeb4e6
    %(prog)s auto --once                       # single auto-switch tick (cron-friendly)
    %(prog)s config set autoswitch.threshold 80
  
-@@ -1558,6 +1669,8 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
+@@ -1558,6 +1687,8 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
              payload = switcher.switch_to(
                  args.switch_to, json_output=args.json, force=args.force
              )
@@ -1542,10 +1677,10 @@ index 0000000000000000000000000000000000000000..3806badda3ec1eeb8a08aaa04051e289
 +        assert "chrome --quit <num|email>" in out
 diff --git a/tests/test_chrome_profile.py b/tests/test_chrome_profile.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..6fe615f62510bf5061c20fc21a1a95633af733e0
+index 0000000000000000000000000000000000000000..02ba4272bfbf796ff04ee9ae2dde0bd4bacaf9b2
 --- /dev/null
 +++ b/tests/test_chrome_profile.py
-@@ -0,0 +1,379 @@
+@@ -0,0 +1,495 @@
 +"""``cswap chrome`` first-open preparation: the new account's profile is a
 +copy of the stock Chrome's last-used profile minus its claude.ai cookies,
 +named after the account, with a window colour of its own; and
@@ -1565,6 +1700,7 @@ index 0000000000000000000000000000000000000000..6fe615f62510bf5061c20fc21a1a9563
 +
 +from claude_swap import chrome, cli
 +from claude_swap.chrome import (
++    CLAUDE_EXTENSION_STATE,
 +    CLAUDE_URL,
 +    EXTENSION_URL,
 +    ChromeManager,
@@ -1573,6 +1709,7 @@ index 0000000000000000000000000000000000000000..6fe615f62510bf5061c20fc21a1a9563
 +    last_used_profile,
 +    profile_color,
 +    strip_claude_cookies,
++    transplant_claude_cookies,
 +)
 +from claude_swap.exceptions import ConfigError, SessionError
 +from claude_swap.models import Platform
@@ -1851,6 +1988,120 @@ index 0000000000000000000000000000000000000000..6fe615f62510bf5061c20fc21a1a9563
 +             patch.object(chrome, "launch"):
 +            manager.open(["2"])
 +        clone.assert_not_called()
++
++
++class TestTransplant:
++    def test_moves_claude_rows_only(self, tmp_path):
++        _cookie_db(tmp_path / "acct" / "Cookies", ["claude.ai", ".claude.ai", "mine.com"])
++        _cookie_db(tmp_path / "fresh" / "Cookies", ["example.com"])
++        assert transplant_claude_cookies(tmp_path / "acct", tmp_path / "fresh") == 2
++        assert _hosts(tmp_path / "fresh" / "Cookies") == [".claude.ai", "claude.ai", "example.com"]
++
++    def test_schema_mismatch_copies_nothing(self, tmp_path):
++        _cookie_db(tmp_path / "acct" / "Cookies", ["claude.ai"])
++        (tmp_path / "fresh").mkdir()
++        conn = sqlite3.connect(tmp_path / "fresh" / "Cookies")
++        conn.execute("CREATE TABLE cookies (host_key TEXT, name TEXT, value TEXT, extra INT)")
++        conn.commit(); conn.close()
++        assert transplant_claude_cookies(tmp_path / "acct", tmp_path / "fresh") == 0
++
++    def test_missing_jar_is_zero(self, tmp_path):
++        assert transplant_claude_cookies(tmp_path / "a", tmp_path / "b") == 0
++
++
++class TestSync:
++    @pytest.fixture
++    def opened(self, manager, stock):
++        """Account 2 opened once (cloned), then lived a little: its own
++        claude.ai login, extension state, a bookmark change."""
++        with patch.object(chrome, "stock_user_data_dir", return_value=stock), \
++             patch.object(chrome, "stock_instance_running", return_value=False), \
++             patch.object(chrome, "running_pids", return_value=[]), \
++             patch.object(chrome, "launch"):
++            manager.open(["2"])
++        default = manager.data_dir("2", "account2@example.com") / "Default"
++        conn = sqlite3.connect(default / "Network" / "Cookies")
++        conn.execute("INSERT INTO cookies VALUES ('claude.ai', 'sessionKey', X'02')")
++        conn.commit(); conn.close()
++        (default / CLAUDE_EXTENSION_STATE).mkdir(parents=True)
++        (default / CLAUDE_EXTENSION_STATE / "000001.log").write_text("account-2 state")
++        (default / "Bookmarks").write_text("changed in the account profile")
++        # meanwhile the stock profile gained a site and a new extension
++        stock_default = stock / "Profile 2"
++        conn = sqlite3.connect(stock_default / "Network" / "Cookies")
++        conn.execute("INSERT INTO cookies VALUES ('newsite.com', 'x', X'01')")
++        conn.commit(); conn.close()
++        (stock_default / "Extensions" / "newext" / "1.0").mkdir(parents=True)
++        (stock_default / "Extensions" / "newext" / "1.0" / "manifest.json").write_text("{}")
++        (stock_default / CLAUDE_EXTENSION_STATE).mkdir(parents=True)
++        (stock_default / CLAUDE_EXTENSION_STATE / "000001.log").write_text("account-1 state")
++        return default
++
++    def test_stock_wins_except_login_and_extension_state(self, manager, stock, opened, capsys):
++        with patch.object(chrome, "stock_user_data_dir", return_value=stock), \
++             patch.object(chrome, "stock_instance_running", return_value=False), \
++             patch.object(chrome, "running_pids", return_value=[]):
++            assert manager.sync(["2"]) == 0
++        jar = opened / "Network" / "Cookies"
++        conn = sqlite3.connect(jar)
++        rows = sorted(conn.execute("SELECT host_key, name FROM cookies"))
++        conn.close()
++        assert ("newsite.com", "x") in rows                # from the stock profile
++        assert ("claude.ai", "sessionKey") in rows         # the account's own login
++        assert not any(h in ("claude.ai", ".claude.ai") and n != "sessionKey" for h, n in rows)
++        assert (opened / "Extensions" / "newext").is_dir()  # new stock extension
++        assert (opened / CLAUDE_EXTENSION_STATE / "000001.log").read_text() == "account-2 state"
++        assert (opened / "Bookmarks").read_text() == "{}"   # the profile's own change is gone
++        prefs = json.loads((opened / "Preferences").read_text())
++        assert prefs["profile"]["name"] == "account2@example.com"
++        leftovers = [d.name for d in opened.parent.iterdir() if d.name != "Default"]
++        assert leftovers == []
++        out = _plain(capsys.readouterr().out)
++        assert "2. account2@example.com synced (1 claude.ai cookie(s) and the extension state kept)" in out
++
++    def test_refuses_while_the_browser_is_open(self, manager, stock, opened, capsys):
++        with patch.object(chrome, "stock_user_data_dir", return_value=stock), \
++             patch.object(chrome, "running_pids", return_value=[5]), \
++             patch.object(chrome, "clone_profile") as clone:
++            assert manager.sync(["2"]) == 1
++        clone.assert_not_called()
++        assert (opened / "Bookmarks").read_text() == "changed in the account profile"
++        assert "browser open (PID 5)" in _plain(capsys.readouterr().err)
++
++    def test_never_opened_is_a_note_not_a_failure(self, manager, stock, capsys):
++        with patch.object(chrome, "stock_user_data_dir", return_value=stock), \
++             patch.object(chrome, "running_pids", return_value=[]):
++            assert manager.sync([], all_accounts=True) == 0
++        out = _plain(capsys.readouterr().out)
++        assert "1. account1@example.com never opened" in out
++
++    def test_failed_copy_keeps_the_old_profile(self, manager, stock, opened, capsys):
++        with patch.object(chrome, "stock_user_data_dir", return_value=stock), \
++             patch.object(chrome, "stock_instance_running", return_value=False), \
++             patch.object(chrome, "running_pids", return_value=[]), \
++             patch.object(chrome, "clone_profile", side_effect=OSError("disk full")):
++            assert manager.sync(["2"]) == 1
++        assert (opened / "Bookmarks").read_text() == "changed in the account profile"
++        assert [d.name for d in opened.parent.iterdir()] == ["Default"]
++        assert "disk full" in _plain(capsys.readouterr().err)
++
++    def test_missing_stock_profile_is_an_error(self, manager, tmp_path, capsys):
++        with patch.object(chrome, "stock_user_data_dir", return_value=tmp_path / "none"):
++            assert manager.sync(["2"]) == 1
++        assert "no stock Chrome profile" in _plain(capsys.readouterr().err)
++
++    def test_cli_routes_sync(self, temp_home, capsys):
++        with patch("claude_swap.cli.ClaudeAccountSwitcher"), \
++             patch("claude_swap.cli._guard_root"), \
++             patch("claude_swap.chrome.ChromeManager") as cls:
++            cls.return_value.sync.return_value = 0
++            cli._chrome_command(["--sync", "2"])
++        cls.return_value.sync.assert_called_once_with(["2"], False)
++        with pytest.raises(SystemExit) as exc:
++            cli._chrome_command(["--sync"])
++        assert exc.value.code == 2 and "--sync needs an account" in capsys.readouterr().err
++        with pytest.raises(SystemExit):
++            cli._chrome_command(["--sync", "--quit", "2"])
 +
 +
 +class TestFollowSwitch:
