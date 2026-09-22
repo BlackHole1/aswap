@@ -77,10 +77,10 @@ session and desktop profiles.
 
 diff --git a/src/claude_swap/chrome.py b/src/claude_swap/chrome.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..f37c4872109f1185068e2934111dd451bbe1e853
+index 0000000000000000000000000000000000000000..6e342428d94d742dfcf70bd0d7d1d56b43d6ca54
 --- /dev/null
 +++ b/src/claude_swap/chrome.py
-@@ -0,0 +1,803 @@
+@@ -0,0 +1,851 @@
 +"""Chrome with Claude in Chrome, one browser profile per stored account.
 +
 +``cswap switch`` moves Claude Code to another account, but the Claude in
@@ -346,7 +346,12 @@ index 0000000000000000000000000000000000000000..f37c4872109f1185068e2934111dd451
 +def strip_claude_cookies(profile_dir: Path) -> int:
 +    """Delete every claude.ai cookie from the profile's cookie jar(s), so a
 +    cloned profile starts signed out of Claude and signed in everywhere
-+    else. Returns the number of rows removed."""
++    else. Returns the number of rows removed.
++
++    Raises:
++        sqlite3.Error: the jar could not be read or written; a jar that
++            may still hold the previous login is never handed to Chrome.
++    """
 +    removed = 0
 +    for rel in COOKIE_FILES:
 +        db = profile_dir / rel
@@ -360,19 +365,45 @@ index 0000000000000000000000000000000000000000..f37c4872109f1185068e2934111dd451
 +            )
 +            removed += cur.rowcount
 +            conn.commit()
-+        except sqlite3.Error:
-+            pass
 +        finally:
 +            conn.close()
 +    return removed
++
++
++def check_cookie_jars(profile_dir: Path) -> None:
++    """Run SQLite's ``quick_check`` on the profile's cookie jar(s): a copy
++    taken while the stock Chrome was mid-write can be inconsistent, and
++    the jar is the file the whole copy exists for.
++
++    Raises:
++        sqlite3.Error: the check reported a problem, with its first line.
++    """
++    for rel in COOKIE_FILES:
++        db = profile_dir / rel
++        if not db.is_file():
++            continue
++        conn = sqlite3.connect(db)
++        try:
++            verdict = conn.execute("PRAGMA quick_check").fetchone()[0]
++        except sqlite3.Error as exc:
++            raise sqlite3.DatabaseError(f"{rel}: {exc}") from exc
++        finally:
++            conn.close()
++        if verdict != "ok":
++            raise sqlite3.DatabaseError(f"{rel}: {verdict}")
 +
 +
 +def transplant_claude_cookies(from_profile: Path, to_profile: Path) -> int:
 +    """Carry the claude.ai cookies of ``from_profile`` (an account's own
 +    jar) into ``to_profile`` (a fresh, stripped copy of the stock one), so a
 +    resync keeps the account's Claude login. Same machine, same Chrome, so
-+    the encrypted values decrypt in either jar. Returns rows copied; 0
-+    when the two jars' schemas differ (a Chrome update between the two)."""
++    the encrypted values decrypt in either jar. Returns rows copied.
++
++    Raises:
++        ConfigError: the two jars' schemas differ (a Chrome update between
++            the two), so the login could not be carried over.
++        sqlite3.Error: a jar could not be read or written.
++    """
 +    copied = 0
 +    for rel in COOKIE_FILES:
 +        src, dest = from_profile / rel, to_profile / rel
@@ -384,15 +415,18 @@ index 0000000000000000000000000000000000000000..f37c4872109f1185068e2934111dd451
 +            main_cols = [r[1] for r in conn.execute("PRAGMA main.table_info(cookies)")]
 +            old_cols = [r[1] for r in conn.execute("PRAGMA old.table_info(cookies)")]
 +            if main_cols != old_cols:
-+                continue
++                raise ConfigError(
++                    f"the cookie jar {rel} has a different layout in the stock "
++                    "profile and in this account's profile (a Chrome update in "
++                    "between); open the account's browser once so Chrome "
++                    "upgrades its jar, then retry --sync"
++                )
 +            cur = conn.execute(
 +                "INSERT OR REPLACE INTO main.cookies SELECT * FROM old.cookies "
 +                "WHERE host_key = 'claude.ai' OR host_key LIKE '%.claude.ai'"
 +            )
 +            copied += cur.rowcount
 +            conn.commit()
-+        except sqlite3.Error:
-+            pass
 +        finally:
 +            conn.close()
 +    return copied
@@ -663,7 +697,16 @@ index 0000000000000000000000000000000000000000..f37c4872109f1185068e2934111dd451
 +        if self.platform == Platform.WINDOWS and (stock / "Local State").is_file():
 +            # Holds the key the cookie jar is encrypted with there.
 +            shutil.copy2(stock / "Local State", data_dir / "Local State")
-+        removed = strip_claude_cookies(dest)
++        try:
++            check_cookie_jars(dest)
++            removed = strip_claude_cookies(dest)
++        except sqlite3.Error as exc:
++            raise ConfigError(
++                f"the copied cookie jar is not usable ({exc}); the stock Chrome "
++                "was probably writing it. Retry in a moment, or with the stock "
++                "Chrome closed; or run 'cswap config set chrome.cloneStockProfile "
++                "false' to start this account from an empty profile"
++            ) from exc
 +        note = f"  copied {report.files} file(s) from {src.name}"
 +        if removed:
 +            note += f", dropped {removed} claude.ai cookie(s)"
@@ -752,7 +795,12 @@ index 0000000000000000000000000000000000000000..f37c4872109f1185068e2934111dd451
 +            shutil.rmtree(staging, ignore_errors=True)
 +            try:
 +                self._copy_stock(src, staging, data_dir)
-+                kept = transplant_claude_cookies(current, staging)
++                try:
++                    kept = transplant_claude_cookies(current, staging)
++                except sqlite3.Error as exc:
++                    raise ConfigError(
++                        f"could not carry this account's claude.ai cookies over ({exc})"
++                    ) from exc
 +                state = current / CLAUDE_EXTENSION_STATE
 +                if state.is_dir():
 +                    shutil.rmtree(staging / CLAUDE_EXTENSION_STATE, ignore_errors=True)
@@ -885,7 +933,7 @@ index 0000000000000000000000000000000000000000..f37c4872109f1185068e2934111dd451
 +        if sys.platform != "win32":
 +            os.chmod(path, 0o700)
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index 4bd5417a458917c60cb74cd662ac8a3c0a8c245c..be62ca5dc4c77c92e94100c83e5746613ef08fd9 100644
+index 4bd5417a458917c60cb74cd662ac8a3c0a8c245c..00c15dc805a315053484bf7605778b7ed32d9228 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
 @@ -465,6 +465,126 @@ Examples:
@@ -1045,15 +1093,15 @@ index 4bd5417a458917c60cb74cd662ac8a3c0a8c245c..be62ca5dc4c77c92e94100c83e574661
    %(prog)s auto --once                       # single auto-switch tick (cron-friendly)
    %(prog)s config set autoswitch.threshold 80
  
-@@ -1558,6 +1687,8 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
-             payload = switcher.switch_to(
-                 args.switch_to, json_output=args.json, force=args.force
-             )
+@@ -1589,6 +1718,8 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
+             from claude_swap.menubar import run as menubar_run
+ 
+             sys.exit(menubar_run(switcher))
 +        if payload is not None and (args.switch or args.switch_to) and not args.json:
 +            _follow_switch(switcher, payload)
-         elif args.status:
-             payload = switcher.status(json_output=args.json)
-         elif args.purge:
+     except ClaudeSwitchError as e:
+         # In JSON mode keep stdout pure JSON: emit the structured error envelope
+         # there (exit 1) instead of a red stderr line.
 diff --git a/src/claude_swap/settings.py b/src/claude_swap/settings.py
 index b50d4e7dceb6eab636c1621d5126285e0d75aee5..9e8fd46b56aca89e803b211ae3ed97f6b941a263 100644
 --- a/src/claude_swap/settings.py
@@ -1677,10 +1725,10 @@ index 0000000000000000000000000000000000000000..3806badda3ec1eeb8a08aaa04051e289
 +        assert "chrome --quit <num|email>" in out
 diff --git a/tests/test_chrome_profile.py b/tests/test_chrome_profile.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..02ba4272bfbf796ff04ee9ae2dde0bd4bacaf9b2
+index 0000000000000000000000000000000000000000..cd9922cd23fa41c3666ddcb237953eecaf7673cc
 --- /dev/null
 +++ b/tests/test_chrome_profile.py
-@@ -0,0 +1,495 @@
+@@ -0,0 +1,566 @@
 +"""``cswap chrome`` first-open preparation: the new account's profile is a
 +copy of the stock Chrome's last-used profile minus its claude.ai cookies,
 +named after the account, with a window colour of its own; and
@@ -1701,6 +1749,7 @@ index 0000000000000000000000000000000000000000..02ba4272bfbf796ff04ee9ae2dde0bd4
 +from claude_swap import chrome, cli
 +from claude_swap.chrome import (
 +    CLAUDE_EXTENSION_STATE,
++    check_cookie_jars,
 +    CLAUDE_URL,
 +    EXTENSION_URL,
 +    ChromeManager,
@@ -1852,6 +1901,26 @@ index 0000000000000000000000000000000000000000..02ba4272bfbf796ff04ee9ae2dde0bd4
 +    def test_no_jar_is_zero(self, tmp_path):
 +        assert strip_claude_cookies(tmp_path) == 0
 +
++    def test_unwritable_jar_raises_instead_of_keeping_the_login(self, tmp_path):
++        (tmp_path / "Cookies").write_bytes(b"SQLite format 3\x00" + b"\x00" * 80)
++        with pytest.raises(sqlite3.Error):
++            strip_claude_cookies(tmp_path)
++
++
++class TestCheckJars:
++    def test_ok_and_missing_pass(self, tmp_path):
++        check_cookie_jars(tmp_path)
++        _cookie_db(tmp_path / "Cookies", ["a.com"])
++        check_cookie_jars(tmp_path)
++
++    def test_torn_copy_is_reported(self, tmp_path):
++        _cookie_db(tmp_path / "Cookies", ["a.com"])
++        with open(tmp_path / "Cookies", "r+b") as fh:
++            fh.seek(0, 2)
++            fh.truncate(fh.tell() // 2)  # half a database, as a mid-write copy could be
++        with pytest.raises(sqlite3.Error, match="Cookies"):
++            check_cookie_jars(tmp_path)
++
 +
 +class TestBrand:
 +    def test_names_and_colours_an_existing_preferences_file(self, tmp_path):
@@ -1979,6 +2048,30 @@ index 0000000000000000000000000000000000000000..02ba4272bfbf796ff04ee9ae2dde0bd4
 +        assert launch.call_args.args[2] == [EXTENSION_URL, CLAUDE_URL]
 +        assert "no stock Chrome profile" in _plain(capsys.readouterr().out)
 +
++    def test_torn_cookie_jar_fails_the_account_and_names_the_fix(
++        self, manager, stock, capsys
++    ):
++        with patch.object(chrome, "stock_user_data_dir", return_value=stock), \
++             patch.object(chrome, "stock_instance_running", return_value=True), \
++             patch.object(chrome, "running_pids", return_value=[]), \
++             patch.object(chrome, "check_cookie_jars", side_effect=sqlite3.DatabaseError("torn")), \
++             patch.object(chrome, "launch") as launch:
++            assert manager.open(["2"]) == 1
++        launch.assert_not_called()
++        assert not manager.data_dir("2", "account2@example.com").exists()
++        err = _plain(capsys.readouterr().err)
++        assert "not usable (torn)" in err and "stock Chrome closed" in err
++
++    def test_failed_cookie_strip_fails_the_account(self, manager, stock, capsys):
++        with patch.object(chrome, "stock_user_data_dir", return_value=stock), \
++             patch.object(chrome, "stock_instance_running", return_value=False), \
++             patch.object(chrome, "running_pids", return_value=[]), \
++             patch.object(chrome, "strip_claude_cookies", side_effect=sqlite3.OperationalError("locked")), \
++             patch.object(chrome, "launch") as launch:
++            assert manager.open(["2"]) == 1
++        launch.assert_not_called()
++        assert not manager.data_dir("2", "account2@example.com").exists()
++
 +    def test_second_open_does_not_clone_again(self, manager, stock):
 +        data_dir = manager.data_dir("2", "account2@example.com")
 +        (data_dir / "Default").mkdir(parents=True)
@@ -1997,13 +2090,14 @@ index 0000000000000000000000000000000000000000..02ba4272bfbf796ff04ee9ae2dde0bd4
 +        assert transplant_claude_cookies(tmp_path / "acct", tmp_path / "fresh") == 2
 +        assert _hosts(tmp_path / "fresh" / "Cookies") == [".claude.ai", "claude.ai", "example.com"]
 +
-+    def test_schema_mismatch_copies_nothing(self, tmp_path):
++    def test_schema_mismatch_refuses_rather_than_dropping_the_login(self, tmp_path):
 +        _cookie_db(tmp_path / "acct" / "Cookies", ["claude.ai"])
 +        (tmp_path / "fresh").mkdir()
 +        conn = sqlite3.connect(tmp_path / "fresh" / "Cookies")
 +        conn.execute("CREATE TABLE cookies (host_key TEXT, name TEXT, value TEXT, extra INT)")
 +        conn.commit(); conn.close()
-+        assert transplant_claude_cookies(tmp_path / "acct", tmp_path / "fresh") == 0
++        with pytest.raises(ConfigError, match="different layout.*retry --sync"):
++            transplant_claude_cookies(tmp_path / "acct", tmp_path / "fresh")
 +
 +    def test_missing_jar_is_zero(self, tmp_path):
 +        assert transplant_claude_cookies(tmp_path / "a", tmp_path / "b") == 0
@@ -2085,6 +2179,18 @@ index 0000000000000000000000000000000000000000..02ba4272bfbf796ff04ee9ae2dde0bd4
 +        assert [d.name for d in opened.parent.iterdir()] == ["Default"]
 +        assert "disk full" in _plain(capsys.readouterr().err)
 +
++    def test_transplant_failure_keeps_the_old_profile(self, manager, stock, opened, capsys):
++        with patch.object(chrome, "stock_user_data_dir", return_value=stock), \
++             patch.object(chrome, "stock_instance_running", return_value=False), \
++             patch.object(chrome, "running_pids", return_value=[]), \
++             patch.object(chrome, "transplant_claude_cookies", side_effect=sqlite3.OperationalError("locked")):
++            assert manager.sync(["2"]) == 1
++        assert (opened / "Bookmarks").read_text() == "changed in the account profile"
++        assert [d.name for d in opened.parent.iterdir()] == ["Default"]
++        assert "could not carry this account's claude.ai cookies over (locked)" in _plain(
++            capsys.readouterr().err
++        )
++
 +    def test_missing_stock_profile_is_an_error(self, manager, tmp_path, capsys):
 +        with patch.object(chrome, "stock_user_data_dir", return_value=tmp_path / "none"):
 +            assert manager.sync(["2"]) == 1
@@ -2144,6 +2250,19 @@ index 0000000000000000000000000000000000000000..02ba4272bfbf796ff04ee9ae2dde0bd4
 +        with patch("claude_swap.chrome.ChromeManager", side_effect=ConfigError("no chrome")):
 +            cli._follow_switch(object(), {"switched": True, "to": {"number": 1, "email": "a"}})
 +        assert "chrome.followSwitch: no chrome" in _plain(capsys.readouterr().out)
++
++    def test_hook_runs_after_the_dispatch_chain_only_for_switches(self, temp_home):
++        """A ``--status`` payload must not reach the hook, and the hook must
++        not sit inside the elif chain where it would swallow later branches."""
++        with patch("claude_swap.cli.ClaudeAccountSwitcher") as sw, \
++             patch("claude_swap.cli._guard_root"), \
++             patch("claude_swap.cli._follow_switch") as hook, \
++             patch("claude_swap.update_check.check_for_update", return_value=None), \
++             patch("sys.argv", ["claude-swap", "--status"]):
++            sw.return_value.status.return_value = {"switched": True, "to": {"number": 2, "email": "b"}}
++            cli.main()
++        sw.return_value.status.assert_called_once()
++        hook.assert_not_called()
 +
 +    def test_switch_to_runs_the_hook(self, temp_home):
 +        with patch("claude_swap.cli.ClaudeAccountSwitcher") as sw, \
