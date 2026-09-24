@@ -81,7 +81,7 @@ Do not edit the `.patch` file. Amend the commit that produced it:
 BASE=$(bun -e 'console.log(require("./upstream.json").commit)')
 git -C cswap log --oneline $BASE..HEAD          # find the commit
 # make the change in cswap/, then
-git -C cswap commit --fixup <sha> -a
+git -C cswap add -A && git -C cswap commit --fixup <sha>
 GIT_SEQUENCE_EDITOR=true git -C cswap rebase -i --autosquash $BASE
 bun run patches export                          # only that patch is rewritten
 ```
@@ -96,15 +96,21 @@ the old file behind as `not listed`: delete it.
 
 ### Insert a patch in the middle or reorder
 
-Commit the new change on top, then move it with a non-interactive rebase:
+Commit the new change on top, then rebuild the branch around it with
+cherry-picks. The `reset --hard` discards uncommitted edits, so
+`git -C cswap status --short` must print nothing first:
 
 ```bash
-BASE=$(bun -e 'console.log(require("./upstream.json").commit)')
-git -C cswap rebase --onto <sha-to-insert-after> HEAD~1 HEAD   # simplest for one commit
-# or edit the order with a scripted sequence editor
-GIT_SEQUENCE_EDITOR='sed -i "" "s/^pick \(SHA_A\)/pick SHA_B\npick \1/"' git -C cswap rebase -i $BASE
+NEW=$(git -C cswap rev-parse HEAD)          # the change to insert
+TIP=$(git -C cswap rev-parse HEAD~1)        # the rest of the series
+git -C cswap reset --hard <sha-to-insert-after>
+git -C cswap cherry-pick $NEW
+git -C cswap cherry-pick <sha-to-insert-after>..$TIP
 bun run patches export        # .patches is rewritten in the new order; unchanged diffs stay untouched
 ```
+
+On a conflict, resolve it, `git -C cswap add -A`, `git -C cswap cherry-pick
+--continue`, and run the remaining `cherry-pick` if it was the first one.
 
 Reordering `.patches` by hand and running `apply` is also valid when the
 patches are independent; then `export` only rewrites `.patches`.
