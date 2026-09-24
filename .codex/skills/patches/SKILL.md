@@ -97,7 +97,8 @@ the old file behind as `not listed`: delete it.
 ### Insert a patch in the middle or reorder
 
 Commit the new change on top, then rebuild the branch around it with
-cherry-picks:
+cherry-picks. The `reset --hard` discards uncommitted edits, so
+`git -C cswap status --short` must print nothing first:
 
 ```bash
 NEW=$(git -C cswap rev-parse HEAD)          # the change to insert
