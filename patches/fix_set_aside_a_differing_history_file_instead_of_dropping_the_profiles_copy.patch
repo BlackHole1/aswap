@@ -134,10 +134,10 @@ index e41dbf43b666afa88c02c9560400ff761bbd9b59..8f741fb382f56a66bcf85348e3e8fb17
      @staticmethod
      def _read_manifest(manifest_path: Path) -> list[str]:
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index 8c64df8de23b608705e7c6957cc57502ce28d180..a51adda7d31409da587101089e5b60a153d5c776 100644
+index 537ee6051a3538b6f7c697a201ea01733f9e5e66..063ef742014026ae1bf8c2253d79f88a555673f5 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
-@@ -7663,7 +7663,7 @@ class ClaudeAccountSwitcher:
+@@ -7672,7 +7672,7 @@ class ClaudeAccountSwitcher:
              if sessions_root.is_dir()
              else []
          )
@@ -146,7 +146,7 @@ index 8c64df8de23b608705e7c6957cc57502ce28d180..a51adda7d31409da587101089e5b60a1
  
          live = {}
          unreadable = {}
-@@ -7695,6 +7695,11 @@ class ClaudeAccountSwitcher:
+@@ -7704,6 +7704,11 @@ class ClaudeAccountSwitcher:
  
          warning("This will remove ALL claude-swap data from your system:")
          print(f"  - Backup directory: {self.backup_dir}")

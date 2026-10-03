@@ -933,10 +933,10 @@ index 0000000000000000000000000000000000000000..6e342428d94d742dfcf70bd0d7d1d56b
 +        if sys.platform != "win32":
 +            os.chmod(path, 0o700)
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index 4bd5417a458917c60cb74cd662ac8a3c0a8c245c..00c15dc805a315053484bf7605778b7ed32d9228 100644
+index efd0b72323cc325eaef6fb2ad3adf59d2840f560..a5be4aff349e065e31ac5b3799671eabf423ddb0 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
-@@ -465,6 +465,126 @@ Examples:
+@@ -468,6 +468,126 @@ Examples:
          sys.exit(code)
  
  
@@ -1063,7 +1063,7 @@ index 4bd5417a458917c60cb74cd662ac8a3c0a8c245c..00c15dc805a315053484bf7605778b7e
  def _unclaimed_command(argv: list[str]) -> None:
      """Handle `cswap unclaimed [--purge ID]` — inspect or drop a stash row.
  
-@@ -1133,6 +1253,9 @@ def main() -> None:
+@@ -1136,6 +1256,9 @@ def main() -> None:
      if argv and argv[0] == "desktop":
          _desktop_command(argv[1:])
          return
@@ -1073,7 +1073,7 @@ index 4bd5417a458917c60cb74cd662ac8a3c0a8c245c..00c15dc805a315053484bf7605778b7e
      if argv and argv[0] == "alias":
          _alias_command(argv[1:])
          return
-@@ -1177,6 +1300,11 @@ Commands:
+@@ -1180,6 +1303,11 @@ Commands:
    %(prog)s desktop --all              one Claude Desktop window per account
    %(prog)s desktop --quit <num|email> close an account's Claude Desktop window
    %(prog)s desktop                    which accounts have a window open
@@ -1085,7 +1085,7 @@ index 4bd5417a458917c60cb74cd662ac8a3c0a8c245c..00c15dc805a315053484bf7605778b7e
    %(prog)s map <num|email> [path]     map a directory to an account
    %(prog)s map                        list directory mappings
    %(prog)s unmap [path]               remove a directory mapping
-@@ -1209,6 +1337,7 @@ Aliases: ls=list  rm=remove  update=upgrade""",
+@@ -1214,6 +1342,7 @@ Aliases: ls=list  rm=remove  update=upgrade""",
    %(prog)s add-token sk-ant-oat01-... --email me@example.com
    %(prog)s run 2 -- --resume                 # forward args after '--' to claude
    %(prog)s desktop 2                         # Claude Desktop signed in as account 2
@@ -1093,7 +1093,7 @@ index 4bd5417a458917c60cb74cd662ac8a3c0a8c245c..00c15dc805a315053484bf7605778b7e
    %(prog)s auto --once                       # single auto-switch tick (cron-friendly)
    %(prog)s config set autoswitch.threshold 80
  
-@@ -1589,6 +1718,8 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
+@@ -1619,6 +1748,8 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
              from claude_swap.menubar import run as menubar_run
  
              sys.exit(menubar_run(switcher))
@@ -1211,7 +1211,7 @@ index b50d4e7dceb6eab636c1621d5126285e0d75aee5..9e8fd46b56aca89e803b211ae3ed97f6
      rows = []
      for spec in SETTING_SPECS.values():
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index 17c0fd2aacdb601365af39a7ccbaf8d90dbe6850..e5c998ac2f43698b0eb743b1a2e43813274421db 100644
+index 64b0e03b8d275a29981d0dc1a745e0cea3df91af..ca7e09c7bd0d166c1a30400520668f7d7aa67eeb 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
 @@ -954,12 +954,15 @@ class ClaudeAccountSwitcher:
@@ -1243,7 +1243,7 @@ index 17c0fd2aacdb601365af39a7ccbaf8d90dbe6850..e5c998ac2f43698b0eb743b1a2e43813
      def _prune_mappings(self, email: str, org_uuid: str) -> None:
          """Drop directory mappings for an identity that no longer has a slot.
  
-@@ -7719,6 +7728,23 @@ class ClaudeAccountSwitcher:
+@@ -7728,6 +7737,23 @@ class ClaudeAccountSwitcher:
              if desktop_root.is_dir()
              else []
          )
@@ -1267,7 +1267,7 @@ index 17c0fd2aacdb601365af39a7ccbaf8d90dbe6850..e5c998ac2f43698b0eb743b1a2e43813
  
          warning("This will remove ALL claude-swap data from your system:")
          print(f"  - Backup directory: {self.backup_dir}")
-@@ -7737,6 +7763,8 @@ class ClaudeAccountSwitcher:
+@@ -7746,6 +7772,8 @@ class ClaudeAccountSwitcher:
              print("  - All session profiles and their Keychain entries")
          if desktop_profiles:
              print("  - All Claude Desktop profiles (each account's desktop login)")
@@ -1276,7 +1276,7 @@ index 17c0fd2aacdb601365af39a7ccbaf8d90dbe6850..e5c998ac2f43698b0eb743b1a2e43813
          print()
          print(dimmed("Note: This does NOT affect your current Claude Code login."))
          print()
-@@ -7800,6 +7828,8 @@ class ClaudeAccountSwitcher:
+@@ -7809,6 +7837,8 @@ class ClaudeAccountSwitcher:
              removed_items.append(
                  f"Claude Desktop profiles: {', '.join(desktop_profiles)}"
              )

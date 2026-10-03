@@ -48,10 +48,10 @@ files, each cached in its own memory, so nothing syncs live, their
 writes overwrite each other, and only a reload rereads from disk.
 
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index 6557093b52dff125ca65ed421b0d759b03fad6d1..4bd5417a458917c60cb74cd662ac8a3c0a8c245c 100644
+index 017bc66d11a0aa838a5b04f941af426e5f4f5583..efd0b72323cc325eaef6fb2ad3adf59d2840f560 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
-@@ -387,6 +387,84 @@ def _refresh_command(argv: list[str]) -> None:
+@@ -390,6 +390,84 @@ def _refresh_command(argv: list[str]) -> None:
          sys.exit(code)
  
  
@@ -136,7 +136,7 @@ index 6557093b52dff125ca65ed421b0d759b03fad6d1..4bd5417a458917c60cb74cd662ac8a3c
  def _unclaimed_command(argv: list[str]) -> None:
      """Handle `cswap unclaimed [--purge ID]` — inspect or drop a stash row.
  
-@@ -1052,6 +1130,9 @@ def main() -> None:
+@@ -1055,6 +1133,9 @@ def main() -> None:
      if argv and argv[0] == "refresh":
          _refresh_command(argv[1:])
          return
@@ -146,7 +146,7 @@ index 6557093b52dff125ca65ed421b0d759b03fad6d1..4bd5417a458917c60cb74cd662ac8a3c
      if argv and argv[0] == "alias":
          _alias_command(argv[1:])
          return
-@@ -1092,6 +1173,10 @@ Commands:
+@@ -1095,6 +1176,10 @@ Commands:
    %(prog)s enable <num|email>         return a disabled account to rotation
    %(prog)s run <num|email> [-- ...]   run as an account, this terminal only
    %(prog)s run                        run the current dir's mapped account
@@ -157,7 +157,7 @@ index 6557093b52dff125ca65ed421b0d759b03fad6d1..4bd5417a458917c60cb74cd662ac8a3c
    %(prog)s map <num|email> [path]     map a directory to an account
    %(prog)s map                        list directory mappings
    %(prog)s unmap [path]               remove a directory mapping
-@@ -1123,6 +1208,7 @@ Aliases: ls=list  rm=remove  update=upgrade""",
+@@ -1128,6 +1213,7 @@ Aliases: ls=list  rm=remove  update=upgrade""",
    %(prog)s add --slot 3                      # add to a specific slot
    %(prog)s add-token sk-ant-oat01-... --email me@example.com
    %(prog)s run 2 -- --resume                 # forward args after '--' to claude
@@ -919,7 +919,7 @@ index fd3d0df9f742b20dd021b94a56ffac7e2cd64415..b50d4e7dceb6eab636c1621d5126285e
      rows = []
      for spec in SETTING_SPECS.values():
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index a51adda7d31409da587101089e5b60a153d5c776..17c0fd2aacdb601365af39a7ccbaf8d90dbe6850 100644
+index 063ef742014026ae1bf8c2253d79f88a555673f5..64b0e03b8d275a29981d0dc1a745e0cea3df91af 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
 @@ -952,11 +952,20 @@ class ClaudeAccountSwitcher:
@@ -943,7 +943,7 @@ index a51adda7d31409da587101089e5b60a153d5c776..17c0fd2aacdb601365af39a7ccbaf8d9
  
      def _prune_mappings(self, email: str, org_uuid: str) -> None:
          """Drop directory mappings for an identity that no longer has a slot.
-@@ -7692,6 +7701,24 @@ class ClaudeAccountSwitcher:
+@@ -7701,6 +7710,24 @@ class ClaudeAccountSwitcher:
                  "would pull a live profile out from under it. Repair or remove "
                  "them, then retry --purge."
              )
@@ -968,7 +968,7 @@ index a51adda7d31409da587101089e5b60a153d5c776..17c0fd2aacdb601365af39a7ccbaf8d9
  
          warning("This will remove ALL claude-swap data from your system:")
          print(f"  - Backup directory: {self.backup_dir}")
-@@ -7708,6 +7735,8 @@ class ClaudeAccountSwitcher:
+@@ -7717,6 +7744,8 @@ class ClaudeAccountSwitcher:
              print("  - All stored account credential files")
          if session_dirs:
              print("  - All session profiles and their Keychain entries")
@@ -977,7 +977,7 @@ index a51adda7d31409da587101089e5b60a153d5c776..17c0fd2aacdb601365af39a7ccbaf8d9
          print()
          print(dimmed("Note: This does NOT affect your current Claude Code login."))
          print()
-@@ -7767,6 +7796,10 @@ class ClaudeAccountSwitcher:
+@@ -7776,6 +7805,10 @@ class ClaudeAccountSwitcher:
              removed_items.append(
                  f"Session profiles: {', '.join(d.name for d in session_dirs)}"
              )
