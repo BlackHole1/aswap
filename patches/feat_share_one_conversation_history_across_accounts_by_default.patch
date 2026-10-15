@@ -36,7 +36,7 @@ forked before the setting existed folds back in on its next launch
 without losing a file.
 
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index 6f7cbc7a993bc0c42a990d84ed3fae93afa8056a..017bc66d11a0aa838a5b04f941af426e5f4f5583 100644
+index 344e3250d445ccebf02eb2b1d61ff873fb4bbfd2..d0929bf8586910ffda9a8df4a4c5b22b4b70bc5d 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
 @@ -132,7 +132,7 @@ Examples:
@@ -68,7 +68,7 @@ index 6f7cbc7a993bc0c42a990d84ed3fae93afa8056a..017bc66d11a0aa838a5b04f941af426e
      )
      parser.add_argument(
 diff --git a/src/claude_swap/session.py b/src/claude_swap/session.py
-index 8f741fb382f56a66bcf85348e3e8fb17f626eaeb..dd7da39de39436aa353b97fd0cc4299a519f2431 100644
+index 0beab429634e624d36b365544f83415e5a8cf4a5..f47dae80874e31413f4b973e8ed7afe48238eba8 100644
 --- a/src/claude_swap/session.py
 +++ b/src/claude_swap/session.py
 @@ -22,13 +22,18 @@ detects symlinks and writes through to the target, so in-session ``/config``
@@ -114,7 +114,7 @@ index 8f741fb382f56a66bcf85348e3e8fb17f626eaeb..dd7da39de39436aa353b97fd0cc4299a
  # .claude.json stays excluded as a file, but its one user-scoped key —
  # top-level mcpServers — is mirrored separately by _sync_mcp_servers.
  SHARED_ITEMS = (
-@@ -549,11 +554,16 @@ class SessionManager:
+@@ -572,11 +577,16 @@ class SessionManager:
          identifier: str,
          claude_args: list[str],
          share: bool = True,
@@ -132,7 +132,7 @@ index 8f741fb382f56a66bcf85348e3e8fb17f626eaeb..dd7da39de39436aa353b97fd0cc4299a
          ``require_session`` turns the same-account fast path (a plain claude
          launch on the default login) into a refusal: a wrapper that hands a
          terminal to one account per session needs the isolation guaranteed,
-@@ -571,6 +581,11 @@ class SessionManager:
+@@ -594,6 +604,11 @@ class SessionManager:
                  "re-synced copies there, which would fork the history instead "
                  "of sharing it."
              )
@@ -144,7 +144,7 @@ index 8f741fb382f56a66bcf85348e3e8fb17f626eaeb..dd7da39de39436aa353b97fd0cc4299a
  
          account_num, email, org_uuid = self.switcher.resolve_account(identifier)
          # Guard before the same-account direct-launch fast path below (which
-@@ -608,6 +623,16 @@ class SessionManager:
+@@ -631,6 +646,16 @@ class SessionManager:
                          "default login — launching claude directly."
                      )
                  )
@@ -402,7 +402,7 @@ index 51d835ae8ec5e8ef62571cdb48dfd09a848990e2..60d81f8758b742402a3cf4629235b784
          assert by_key["autoswitch.threshold"]["isSet"] is False
          assert by_key["autoswitch.includeApiKeyAccounts"]["value"] is False
 diff --git a/tests/test_session.py b/tests/test_session.py
-index 70a6649de4aa4b106aca5d7b0e8bd878df5737dc..c1d696256ea438f0fa180bb6ff8da9acc8e92537 100644
+index c45ff3841afa49f33e8ae79097e3ee50d5f1b824..cd9c08b5ac21f644ba943e4e229364394837b071 100644
 --- a/tests/test_session.py
 +++ b/tests/test_session.py
 @@ -26,6 +26,7 @@ from claude_swap.exceptions import (
@@ -413,7 +413,7 @@ index 70a6649de4aa4b106aca5d7b0e8bd878df5737dc..c1d696256ea438f0fa180bb6ff8da9ac
  from claude_swap.session import (
      HISTORY_CONFLICTS_DIRNAME,
      MCP_DISPLACED_STASH,
-@@ -2068,6 +2069,88 @@ class TestShareHistoryPosix:
+@@ -2093,6 +2094,88 @@ class TestShareHistoryPosix:
          assert (proj / "bbb.jsonl").read_text() == "profile-b\n"
  
  
@@ -502,7 +502,7 @@ index 70a6649de4aa4b106aca5d7b0e8bd878df5737dc..c1d696256ea438f0fa180bb6ff8da9ac
  class TestShareHistoryWindows:
      def test_sync_never_links_history_in_copy_mode(self, history_setup):
          source, session_dir, mgr = history_setup
-@@ -2088,6 +2171,29 @@ class TestShareHistoryWindows:
+@@ -2113,6 +2196,29 @@ class TestShareHistoryWindows:
          with pytest.raises(SessionError, match="Windows"):
              mgr.run(ACCOUNT_NUM, [], share=True, share_history=True)
  

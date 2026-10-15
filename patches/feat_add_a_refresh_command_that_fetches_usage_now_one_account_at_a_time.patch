@@ -23,7 +23,7 @@ when the server sent none) and keeps its last measurement on screen.
 Exit code 1 when any requested account could not be refreshed.
 
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index d6661cce70e5d3af160ba3c067126fa68a0cd9b8..6f7cbc7a993bc0c42a990d84ed3fae93afa8056a 100644
+index 4ef4b4e1424cef32c3de9d9182b0b2bee1b14a25..344e3250d445ccebf02eb2b1d61ff873fb4bbfd2 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
 @@ -348,6 +348,46 @@ def _unmap_command(argv: list[str]) -> None:
@@ -92,10 +92,10 @@ index d6661cce70e5d3af160ba3c067126fa68a0cd9b8..6f7cbc7a993bc0c42a990d84ed3fae93
    %(prog)s switch <num|email>         switch to a specific account
    %(prog)s add                        add the current account
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index eb9eeaaf4e6d2e135953bbeb96ed81f2ebb193fa..537ee6051a3538b6f7c697a201ea01733f9e5e66 100644
+index 8917ed78fa56cea58b3fc38f2fb1f0ad75a0d533..c27d245694a64e3c524c83b18ecd62f8a16048af 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
-@@ -74,6 +74,7 @@ from claude_swap.printer import (
+@@ -75,6 +75,7 @@ from claude_swap.printer import (
      ide_short_name,
      muted,
      warning,
@@ -103,7 +103,7 @@ index eb9eeaaf4e6d2e135953bbeb96ed81f2ebb193fa..537ee6051a3538b6f7c697a201ea0173
  )
  from claude_swap.paths import (
      get_backup_root,
-@@ -256,6 +257,56 @@ def _usage_entry_lines(entry: UsageEntry) -> list[str]:
+@@ -257,6 +258,56 @@ def _usage_entry_lines(entry: UsageEntry) -> list[str]:
      return [dimmed(detail)]
  
  
@@ -160,7 +160,7 @@ index eb9eeaaf4e6d2e135953bbeb96ed81f2ebb193fa..537ee6051a3538b6f7c697a201ea0173
  def _label_token_status(source: str, credentials: str) -> str | None:
      """Return ``oauth.build_token_status`` relabelled by credential source."""
      status = oauth.build_token_status(credentials)
-@@ -5199,9 +5250,17 @@ class ClaudeAccountSwitcher:
+@@ -5251,9 +5302,17 @@ class ClaudeAccountSwitcher:
          fetch: set[str] | None = None,
          *,
          scheduled: bool = False,
@@ -178,7 +178,7 @@ index eb9eeaaf4e6d2e135953bbeb96ed81f2ebb193fa..537ee6051a3538b6f7c697a201ea0173
          ``fetch=None`` (on-demand callers: ``--list``/``--status``/switch
          strategies, dashboards) makes every account a candidate but respects
          the persisted poll plans; the auto engine passes an explicit set whose
-@@ -5275,6 +5334,7 @@ class ClaudeAccountSwitcher:
+@@ -5327,6 +5386,7 @@ class ClaudeAccountSwitcher:
                  identities,
                  respect_plans=False,
                  repair_overslept=scheduled,
@@ -186,7 +186,7 @@ index eb9eeaaf4e6d2e135953bbeb96ed81f2ebb193fa..537ee6051a3538b6f7c697a201ea0173
              )
          # An expired ACTIVE credential that cannot reach the fetch path (and
          # its locked refresh) this tick — failure backoff, a concurrent
-@@ -5311,6 +5371,8 @@ class ClaudeAccountSwitcher:
+@@ -5363,6 +5423,8 @@ class ClaudeAccountSwitcher:
              accepted_records = {
                  num: record for num, record in records.items() if num in accepted
              }
@@ -195,7 +195,7 @@ index eb9eeaaf4e6d2e135953bbeb96ed81f2ebb193fa..537ee6051a3538b6f7c697a201ea0173
              for num, record in accepted_records.items():
                  if record.sentinel is not None:
                      sentinels[num] = record.sentinel
-@@ -5867,6 +5929,59 @@ class ClaudeAccountSwitcher:
+@@ -5919,6 +5981,59 @@ class ClaudeAccountSwitcher:
          except Exception:
              self._logger.debug("Failed to detect running instances", exc_info=True)
  
@@ -256,10 +256,10 @@ index eb9eeaaf4e6d2e135953bbeb96ed81f2ebb193fa..537ee6051a3538b6f7c697a201ea0173
          self, account_num: str, current_email: str, org_uuid: str
      ) -> UsageEntry:
 diff --git a/src/claude_swap/usage_store.py b/src/claude_swap/usage_store.py
-index 8573077a82e7ae2e390931d320cbe460dcd0a560..7eadfca120e523aac4bf6f0b8e5580a3617b2e10 100644
+index 6164fe7dbcf39758bd24c7823381e43dcde2261f..70b38e2e22610cd3b233512cef587bad6c24bb8d 100644
 --- a/src/claude_swap/usage_store.py
 +++ b/src/claude_swap/usage_store.py
-@@ -1015,10 +1015,18 @@ class UsageStore:
+@@ -1023,10 +1023,18 @@ class UsageStore:
          *,
          respect_plans: bool,
          repair_overslept: bool = False,
@@ -278,7 +278,7 @@ index 8573077a82e7ae2e390931d320cbe460dcd0a560..7eadfca120e523aac4bf6f0b8e5580a3
          Deciding eligibility on a lock-free :meth:`entries` read and then
          claiming separately lets two collectors both pass the check and both
          fetch; the re-check under the lock closes that window. Eligibility:
-@@ -1054,7 +1062,7 @@ class UsageStore:
+@@ -1062,7 +1070,7 @@ class UsageStore:
                  else:
                      assert isinstance(row, dict)
                      if not _row_eligible(
@@ -287,7 +287,7 @@ index 8573077a82e7ae2e390931d320cbe460dcd0a560..7eadfca120e523aac4bf6f0b8e5580a3
                      ):
                          continue
                  claim_id = uuid.uuid4().hex
-@@ -1277,24 +1285,30 @@ def _num_or_none(value: object) -> float | None:
+@@ -1285,24 +1293,30 @@ def _num_or_none(value: object) -> float | None:
  
  
  def _row_eligible(
@@ -490,10 +490,10 @@ index 0000000000000000000000000000000000000000..518e55182c63c0ec6a354f14271a8e3e
 +            cli.main()
 +        assert "refresh [num|email ...]" in capsys.readouterr().out
 diff --git a/tests/test_usage_store.py b/tests/test_usage_store.py
-index b3e84397721b2833d8aa4e518f9a15d6cc97ac40..36af7839f14e4761840b62029190471f959978b5 100644
+index 9cef7465a358b557db05293c5a490cebd8587cf8..9d494a9a55de651d1a2822f05e38be4d95724d59 100644
 --- a/tests/test_usage_store.py
 +++ b/tests/test_usage_store.py
-@@ -1372,6 +1372,36 @@ class TestReserve:
+@@ -1398,6 +1398,36 @@ class TestReserve:
          assert store.reserve(["1"], IDENT, respect_plans=True) == {}
          assert store.reserve(["1"], IDENT, respect_plans=False) == {}
  
