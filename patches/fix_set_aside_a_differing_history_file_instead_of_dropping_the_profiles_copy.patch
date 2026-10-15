@@ -24,7 +24,7 @@ directory when it exists, since it lives inside the backup dir that purge
 removes.
 
 diff --git a/src/claude_swap/session.py b/src/claude_swap/session.py
-index e41dbf43b666afa88c02c9560400ff761bbd9b59..8f741fb382f56a66bcf85348e3e8fb17f626eaeb 100644
+index 541b26d16aa59aaeb0cd835f58f0f2a97aee2e5c..0beab429634e624d36b365544f83415e5a8cf4a5 100644
 --- a/src/claude_swap/session.py
 +++ b/src/claude_swap/session.py
 @@ -36,6 +36,7 @@ session-aware guards); it receives a ``ClaudeAccountSwitcher`` instance.
@@ -35,7 +35,7 @@ index e41dbf43b666afa88c02c9560400ff761bbd9b59..8f741fb382f56a66bcf85348e3e8fb17
  import hashlib
  import json
  import os
-@@ -93,6 +94,13 @@ HISTORY_ITEMS = (
+@@ -94,6 +95,13 @@ HISTORY_ITEMS = (
  # re-syncs only ever remove cswap-managed links/copies, never user data).
  SHARE_MANIFEST = ".cswap-shared.json"
  
@@ -49,7 +49,7 @@ index e41dbf43b666afa88c02c9560400ff761bbd9b59..8f741fb382f56a66bcf85348e3e8fb17
  # Deferred-invalidation marker: backup credentials changed while a session was
  # live (we never pull credentials out from under a running claude), so the
  # profile must be re-bootstrapped on the next non-live `cswap run` even if it
-@@ -1384,8 +1392,14 @@ class SessionManager:
+@@ -1407,8 +1415,14 @@ class SessionManager:
                      )
                  )
                  return False
@@ -65,7 +65,7 @@ index e41dbf43b666afa88c02c9560400ff761bbd9b59..8f741fb382f56a66bcf85348e3e8fb17
              except OSError as e:
                  self._logger.warning(
                      f"Could not merge {dest.name} into {src}: {e}"
-@@ -1403,6 +1417,16 @@ class SessionManager:
+@@ -1426,6 +1440,16 @@ class SessionManager:
                      f"{src} — conversation history is now shared."
                  )
              )
@@ -82,7 +82,7 @@ index e41dbf43b666afa88c02c9560400ff761bbd9b59..8f741fb382f56a66bcf85348e3e8fb17
          if not src.exists():
              # Fresh ~/.claude (or first run): seed an empty share target so
              # the generic loop below has something to link.
-@@ -1421,15 +1445,22 @@ class SessionManager:
+@@ -1444,15 +1468,22 @@ class SessionManager:
          return True
  
      @staticmethod
@@ -111,7 +111,7 @@ index e41dbf43b666afa88c02c9560400ff761bbd9b59..8f741fb382f56a66bcf85348e3e8fb17
          if dest.is_dir():
              _mkdir_private(src)
              for path in sorted(dest.rglob("*"), reverse=True):
-@@ -1439,8 +1470,11 @@ class SessionManager:
+@@ -1462,8 +1493,11 @@ class SessionManager:
                      path.rmdir()  # children already moved (reverse walk)
                      continue
                  if target.exists():
@@ -125,7 +125,7 @@ index e41dbf43b666afa88c02c9560400ff761bbd9b59..8f741fb382f56a66bcf85348e3e8fb17
                  _mkdir_private(target.parent)
                  shutil.move(str(path), str(target))
              dest.rmdir()
-@@ -1460,6 +1494,7 @@ class SessionManager:
+@@ -1483,6 +1517,7 @@ class SessionManager:
                  with src.open("a", encoding="utf-8") as f:
                      f.write("\n".join(lines) + "\n")
              dest.unlink()
@@ -134,10 +134,10 @@ index e41dbf43b666afa88c02c9560400ff761bbd9b59..8f741fb382f56a66bcf85348e3e8fb17
      @staticmethod
      def _read_manifest(manifest_path: Path) -> list[str]:
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index 537ee6051a3538b6f7c697a201ea01733f9e5e66..063ef742014026ae1bf8c2253d79f88a555673f5 100644
+index c27d245694a64e3c524c83b18ecd62f8a16048af..87f75638fcf7839096c15ce18300670746d858fb 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
-@@ -7672,7 +7672,7 @@ class ClaudeAccountSwitcher:
+@@ -7749,7 +7749,7 @@ class ClaudeAccountSwitcher:
              if sessions_root.is_dir()
              else []
          )
@@ -146,7 +146,7 @@ index 537ee6051a3538b6f7c697a201ea01733f9e5e66..063ef742014026ae1bf8c2253d79f88a
  
          live = {}
          unreadable = {}
-@@ -7704,6 +7704,11 @@ class ClaudeAccountSwitcher:
+@@ -7781,6 +7781,11 @@ class ClaudeAccountSwitcher:
  
          warning("This will remove ALL claude-swap data from your system:")
          print(f"  - Backup directory: {self.backup_dir}")
@@ -159,7 +159,7 @@ index 537ee6051a3538b6f7c697a201ea01733f9e5e66..063ef742014026ae1bf8c2253d79f88a
              print(f"  - Legacy backup directory: {legacy}")
          if self.platform == Platform.MACOS:
 diff --git a/tests/test_session.py b/tests/test_session.py
-index 01d34510b46392e46a82d872226163e10865d707..70a6649de4aa4b106aca5d7b0e8bd878df5737dc 100644
+index f93738378b70a29e4fa32a0a4bd620438562dba2..c45ff3841afa49f33e8ae79097e3ee50d5f1b824 100644
 --- a/tests/test_session.py
 +++ b/tests/test_session.py
 @@ -27,6 +27,7 @@ from claude_swap.exceptions import (
@@ -170,7 +170,7 @@ index 01d34510b46392e46a82d872226163e10865d707..70a6649de4aa4b106aca5d7b0e8bd878
      MCP_DISPLACED_STASH,
      MCP_MIRROR_MARKER,
      SHARE_MANIFEST,
-@@ -1915,11 +1916,11 @@ class TestShareHistoryPosix:
+@@ -1940,11 +1941,11 @@ class TestShareHistoryPosix:
          # And the profile now links to the shared copy.
          assert (session_dir / "projects").readlink() == merged
  
@@ -184,7 +184,7 @@ index 01d34510b46392e46a82d872226163e10865d707..70a6649de4aa4b106aca5d7b0e8bd878
  
          mgr._sync_sharing(session_dir, share=True, share_history=True)
  
-@@ -1927,6 +1928,52 @@ class TestShareHistoryPosix:
+@@ -1952,6 +1953,52 @@ class TestShareHistoryPosix:
              source / "projects" / "-home-user-app" / "aaa.jsonl"
          ).read_text() == "main-a\n"
          assert (session_dir / "projects").is_symlink()
@@ -238,10 +238,10 @@ index 01d34510b46392e46a82d872226163e10865d707..70a6649de4aa4b106aca5d7b0e8bd878
      def test_merge_deferred_while_profile_live(self, history_setup, monkeypatch):
          source, session_dir, mgr = history_setup
 diff --git a/tests/test_switcher.py b/tests/test_switcher.py
-index 58fe49ccf9563b34a2ce2d8fb4c4f26e9152e825..d2d558b055c8c57f6c5085897dc03c105f008e23 100644
+index 88a793a89fdee910851c7e7a264aace76ae7fd8f..7f4b3d0690a981884669597ee215dcace3765c06 100644
 --- a/tests/test_switcher.py
 +++ b/tests/test_switcher.py
-@@ -5064,6 +5064,21 @@ class TestPurgeLegacyCleanup:
+@@ -5205,6 +5205,21 @@ class TestPurgeLegacyCleanup:
          assert str(backup_dir) in out
          assert str(legacy) in out
  
