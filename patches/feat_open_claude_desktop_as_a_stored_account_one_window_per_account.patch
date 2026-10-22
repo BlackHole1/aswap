@@ -1027,10 +1027,10 @@ index 60d81f8758b742402a3cf4629235b784c372f585..f4f09d414f548b638ad7902323e01fd8
          assert by_key["autoswitch.threshold"]["isSet"] is False
 diff --git a/tests/test_desktop.py b/tests/test_desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..21061286c42f6d36d6384ba819c6fd46b194ab28
+index 0000000000000000000000000000000000000000..e95aaf4bed79af3c2b9362841d78d78f7898d440
 --- /dev/null
 +++ b/tests/test_desktop.py
-@@ -0,0 +1,696 @@
+@@ -0,0 +1,697 @@
 +"""``cswap desktop``: Claude Desktop, one window per stored account.
 +
 +Claude Desktop keeps one login per profile, and Electron honors
@@ -1046,7 +1046,7 @@ index 0000000000000000000000000000000000000000..21061286c42f6d36d6384ba819c6fd46
 +import re
 +import subprocess
 +import sys
-+from pathlib import Path
++from pathlib import Path, PurePosixPath
 +from unittest.mock import MagicMock, patch
 +
 +import pytest
@@ -1142,9 +1142,10 @@ index 0000000000000000000000000000000000000000..21061286c42f6d36d6384ba819c6fd46
 +        """``open -n`` so LaunchServices, not this terminal, owns the app;
 +        ``--args`` carries the profile dir through to Electron."""
 +        data_dir = tmp_path / "2-x"
++        # PurePosixPath so the macOS path keeps its slashes on a Windows host.
 +        with patch.object(desktop.subprocess, "run") as run:
 +            run.return_value = MagicMock(returncode=0)
-+            desktop.launch(Path("/Applications/Claude.app"), data_dir, Platform.MACOS)
++            desktop.launch(PurePosixPath("/Applications/Claude.app"), data_dir, Platform.MACOS)
 +        assert run.call_args.args[0] == [
 +            "open", "-n", "-a", "/Applications/Claude.app",
 +            "--args", f"--user-data-dir={data_dir}",
@@ -1169,7 +1170,7 @@ index 0000000000000000000000000000000000000000..21061286c42f6d36d6384ba819c6fd46
 +
 +    def test_activate_reuses_the_running_app(self):
 +        with patch.object(desktop.subprocess, "run") as run:
-+            desktop.activate(Path("/Applications/Claude.app"), Platform.MACOS)
++            desktop.activate(PurePosixPath("/Applications/Claude.app"), Platform.MACOS)
 +        assert run.call_args.args[0] == ["open", "-a", "/Applications/Claude.app"]
 +
 +    def test_activate_is_a_noop_elsewhere(self):
@@ -1575,7 +1576,7 @@ index 0000000000000000000000000000000000000000..21061286c42f6d36d6384ba819c6fd46
 +        assert out.count("1. account1@example.com") == 1
 +
 +    def test_stock_instance_is_the_binary_without_a_profile_flag(self, tmp_path):
-+        app = Path("/Applications/Claude.app")
++        app = PurePosixPath("/Applications/Claude.app")
 +        both = (
 +            "/Applications/Claude.app/Contents/MacOS/Claude --user-data-dir=/x/1-a\n"
 +            "/Applications/Claude.app/Contents/MacOS/Claude\n"
