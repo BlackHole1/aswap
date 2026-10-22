@@ -1287,10 +1287,10 @@ index 76659214b4e074bf775ea36eb07a7f68bca40129..62e8cb997dca97592ac4d103f4bb6699
          if self.backup_dir.exists():
 diff --git a/tests/test_chrome.py b/tests/test_chrome.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..3806badda3ec1eeb8a08aaa04051e289b7dac374
+index 0000000000000000000000000000000000000000..ae31450f042190169ce926a4a6c2fb5cc989649a
 --- /dev/null
 +++ b/tests/test_chrome.py
-@@ -0,0 +1,432 @@
+@@ -0,0 +1,433 @@
 +"""``cswap chrome``: Chrome with Claude in Chrome, one profile per stored account.
 +
 +The extension works as whoever is signed in to claude.ai in the browser,
@@ -1308,7 +1308,7 @@ index 0000000000000000000000000000000000000000..3806badda3ec1eeb8a08aaa04051e289
 +import re
 +import subprocess
 +import sys
-+from pathlib import Path
++from pathlib import Path, PurePosixPath
 +from unittest.mock import MagicMock, patch
 +
 +import pytest
@@ -1425,10 +1425,11 @@ index 0000000000000000000000000000000000000000..3806badda3ec1eeb8a08aaa04051e289
 +        ``--args`` carries the profile dir, the first-run flags and the URLs
 +        through to Chrome."""
 +        data_dir = tmp_path / "2-x"
++        # PurePosixPath so the macOS path keeps its slashes on a Windows host.
 +        with patch.object(chrome.subprocess, "run") as run:
 +            run.return_value = MagicMock(returncode=0)
 +            chrome.launch(
-+                Path("/Applications/Google Chrome.app"), data_dir,
++                PurePosixPath("/Applications/Google Chrome.app"), data_dir,
 +                [CLAUDE_URL], Platform.MACOS,
 +            )
 +        assert run.call_args.args[0] == [
@@ -1725,7 +1726,7 @@ index 0000000000000000000000000000000000000000..3806badda3ec1eeb8a08aaa04051e289
 +        assert "chrome --quit <num|email>" in out
 diff --git a/tests/test_chrome_profile.py b/tests/test_chrome_profile.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..cd9922cd23fa41c3666ddcb237953eecaf7673cc
+index 0000000000000000000000000000000000000000..c4b8ae41a9ca5e5581219a58d67188472573d230
 --- /dev/null
 +++ b/tests/test_chrome_profile.py
 @@ -0,0 +1,566 @@
@@ -1852,7 +1853,7 @@ index 0000000000000000000000000000000000000000..cd9922cd23fa41c3666ddcb237953eec
 +    def test_copies_state_and_skips_caches_locks_and_tabs(self, stock, tmp_path):
 +        dest = tmp_path / "dest"
 +        report = clone_profile(stock / "Profile 2", dest)
-+        copied = sorted(str(p.relative_to(dest)) for p in dest.rglob("*") if p.is_file())
++        copied = sorted(p.relative_to(dest).as_posix() for p in dest.rglob("*") if p.is_file())
 +        assert copied == [
 +            "Bookmarks",
 +            f"Extensions/{chrome.CLAUDE_EXTENSION_ID}/1.0/manifest.json",
