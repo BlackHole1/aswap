@@ -46,3 +46,36 @@ jobs:
         with:
           name: dist
           path: dist/
+
+  # The patches touch platform branches (Claude Desktop, Chrome, process
+  # lookup) that only run on macOS or Windows, so the suite runs there too.
+  # Lint, export and build are platform-independent and stay in the job above.
+  test:
+    name: Tests on ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: Windows
+          - os: macos-latest
+            name: macOS
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      # The runner checks out with core.autocrlf=true, which would turn the
+      # .patch files and the upstream clone into CRLF and break git am.
+      - name: Keep LF line endings
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - uses: astral-sh/setup-uv@v5
+      - name: Apply the series
+        run: bun run patches apply
+      - name: Upstream test suite on the patched tree
+        run: bun run test
