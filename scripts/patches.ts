@@ -118,10 +118,14 @@ function writeUpstream(u: Upstream): void {
 }
 
 function ensureSubmodule(): void {
-  const { url } = readUpstream();
+  const { url, commit } = readUpstream();
   if (!existsSync(path.join(SUB, ".git"))) {
     info(`cloning ${url} into ${SUBMODULE}/...`);
     git(["clone", "-q", url, SUBMODULE], ROOT);
+    // A fresh clone sits on upstream's default branch, and every upstream
+    // commit past the pin would read as an unexported patch: park on the base.
+    ensureBaseFetched(commit);
+    git(["checkout", "-q", "--detach", commit]);
   }
 }
 

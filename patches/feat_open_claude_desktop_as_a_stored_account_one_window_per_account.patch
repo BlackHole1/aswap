@@ -167,10 +167,10 @@ index d0929bf8586910ffda9a8df4a4c5b22b4b70bc5d..43cd7cdf3c2567dfd39b27352f90e415
  
 diff --git a/src/claude_swap/desktop.py b/src/claude_swap/desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..1d910bbb6391d3fea58ffbc7af1042319d49831f
+index 0000000000000000000000000000000000000000..fb3720f888125cfd35e96c96d1f7052b9f8c9a1d
 --- /dev/null
 +++ b/src/claude_swap/desktop.py
-@@ -0,0 +1,649 @@
+@@ -0,0 +1,660 @@
 +"""Claude Desktop, one window per stored account.
 +
 +Claude Desktop holds one login per profile: to use a second account the
@@ -437,11 +437,22 @@ index 0000000000000000000000000000000000000000..1d910bbb6391d3fea58ffbc7af104231
 +
 +
 +def _windows_matching_pids(needle: str) -> str:
-+    """PIDs whose command line contains ``needle``, one per line, via CIM."""
++    """PIDs whose command line carries ``needle`` as a whole token, one per
++    line, via CIM.
++
++    The token ends at whitespace, a closing quote (Windows quotes an
++    argument that holds a space) or the end of the line, the same rule as
++    the POSIX pattern. The PowerShell running the query carries ``needle``
++    in its own command line, so it skips ``$PID`` or every account would
++    always read as open. The quote is ``\\x22`` in the regex: a literal
++    ``"`` would have to survive the trip through ``powershell.exe``'s own
++    argument parsing.
++    """
 +    literal = needle.replace("'", "''")
 +    script = (
-+        "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -ne $null "
-+        f"-and $_.CommandLine.Contains('{literal}') }} "
++        f"$p = [regex]::Escape('{literal}') + '(\\s|\\x22|$)'; "
++        "Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID "
++        "-and $_.CommandLine -ne $null -and $_.CommandLine -cmatch $p } "
 +        "| ForEach-Object { $_.ProcessId }"
 +    )
 +    proc = subprocess.run(
@@ -1016,10 +1027,10 @@ index 60d81f8758b742402a3cf4629235b784c372f585..f4f09d414f548b638ad7902323e01fd8
          assert by_key["autoswitch.threshold"]["isSet"] is False
 diff --git a/tests/test_desktop.py b/tests/test_desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..c83fb963b53698382f52bb8ec50721b616290473
+index 0000000000000000000000000000000000000000..21061286c42f6d36d6384ba819c6fd46b194ab28
 --- /dev/null
 +++ b/tests/test_desktop.py
-@@ -0,0 +1,660 @@
+@@ -0,0 +1,696 @@
 +"""``cswap desktop``: Claude Desktop, one window per stored account.
 +
 +Claude Desktop keeps one login per profile, and Electron honors
@@ -1213,7 +1224,43 @@ index 0000000000000000000000000000000000000000..c83fb963b53698382f52bb8ec50721b6
 +            assert desktop.running_pids(tmp_path / "1-a", Platform.WINDOWS) == [4242]
 +        argv = run.call_args.args[0]
 +        assert argv[0] == "powershell"
-+        assert f"--user-data-dir={tmp_path / '1-a'}" in argv[-1]
++        script = argv[-1]
++        assert f"--user-data-dir={tmp_path / '1-a'}" in script
++        # The query's own PowerShell carries the needle: it must skip itself,
++        # and match the whole token, not a substring.
++        assert "$_.ProcessId -ne $PID" in script
++        assert "-cmatch $p" in script and "'(\\s|\\x22|$)'" in script
++        assert '"' not in script
++
++    @pytest.mark.skipif(sys.platform != "win32", reason="CIM is Windows-only")
++    def test_matches_the_whole_token_through_the_real_cim(self, tmp_path):
++        """Run the query through the real PowerShell: it must not report
++        itself, whose command line carries the needle, nor ``2-ab``."""
++        data_dir = tmp_path / "2-a"
++        sleeper = "import time; time.sleep(30)"
++        # A venv's python.exe is a launcher that starts the base interpreter
++        # as a child with the same command line: start that one directly so
++        # each sleeper is one process.
++        python = getattr(sys, "_base_executable", None) or sys.executable
++        procs = [
++            subprocess.Popen(
++                [python, "-c", sleeper, f"--user-data-dir={dir_}", *rest],
++                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
++                stderr=subprocess.DEVNULL,
++            )
++            for dir_, rest in (
++                (data_dir, []),
++                (data_dir, ["--type=renderer"]),
++                (str(data_dir) + "b", []),
++            )
++        ]
++        try:
++            found = desktop.running_pids(data_dir, Platform.WINDOWS)
++        finally:
++            for proc in procs:
++                proc.kill()
++                proc.wait()
++        assert sorted(found) == sorted(p.pid for p in procs[:2])
 +
 +
 +class TestQuit:
