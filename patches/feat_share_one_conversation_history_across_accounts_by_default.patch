@@ -36,10 +36,10 @@ forked before the setting existed folds back in on its next launch
 without losing a file.
 
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index 344e3250d445ccebf02eb2b1d61ff873fb4bbfd2..d0929bf8586910ffda9a8df4a4c5b22b4b70bc5d 100644
+index 800234228466dc2da4b65a11fc0eae71f8390d84..e9432093c9327a8b70538dce0ff29a50a1dd2bfe 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
-@@ -132,7 +132,7 @@ Examples:
+@@ -133,7 +133,7 @@ Examples:
    cswap run 2
    cswap run user@example.com
    cswap run 2 --no-share
@@ -48,7 +48,7 @@ index 344e3250d445ccebf02eb2b1d61ff873fb4bbfd2..d0929bf8586910ffda9a8df4a4c5b22b
    cswap run 2 --require-session
    cswap run 2 -- --resume
          """,
-@@ -156,13 +156,15 @@ Examples:
+@@ -157,13 +157,15 @@ Examples:
      parser.add_argument(
          "--share-history",
          action=argparse.BooleanOptionalAction,
@@ -68,7 +68,7 @@ index 344e3250d445ccebf02eb2b1d61ff873fb4bbfd2..d0929bf8586910ffda9a8df4a4c5b22b
      )
      parser.add_argument(
 diff --git a/src/claude_swap/session.py b/src/claude_swap/session.py
-index 0beab429634e624d36b365544f83415e5a8cf4a5..f47dae80874e31413f4b973e8ed7afe48238eba8 100644
+index 118da7e47206e7c7c25bf0dd55d0d00de49775ab..ce30dc6e520e1fafe6bf6ef22c989ec99df0d174 100644
 --- a/src/claude_swap/session.py
 +++ b/src/claude_swap/session.py
 @@ -22,13 +22,18 @@ detects symlinks and writes through to the target, so in-session ``/config``
@@ -94,7 +94,7 @@ index 0beab429634e624d36b365544f83415e5a8cf4a5..f47dae80874e31413f4b973e8ed7afe4
  
  This module must not import ``switcher`` (switcher imports us for the
  session-aware guards); it receives a ``ClaudeAccountSwitcher`` instance.
-@@ -62,7 +67,7 @@ from claude_swap.models import Platform
+@@ -61,7 +66,7 @@ from claude_swap.models import Platform
  from claude_swap.paths import get_default_global_config_path
  from claude_swap.printer import accent, dimmed, muted, warning
  from claude_swap.process_detection import ClaudeSession, scan_sessions
@@ -103,7 +103,7 @@ index 0beab429634e624d36b365544f83415e5a8cf4a5..f47dae80874e31413f4b973e8ed7afe4
  
  if TYPE_CHECKING:
      from claude_swap.switcher import ClaudeAccountSwitcher
-@@ -70,8 +75,8 @@ if TYPE_CHECKING:
+@@ -69,8 +74,8 @@ if TYPE_CHECKING:
  # Items mirrored from ~/.claude into session profiles when sharing is on.
  # Deliberately excludes anything account- or instance-scoped: plugins/,
  # sessions/, ide/, .claude.json, .credentials.json, statsig/ and other
@@ -114,7 +114,7 @@ index 0beab429634e624d36b365544f83415e5a8cf4a5..f47dae80874e31413f4b973e8ed7afe4
  # .claude.json stays excluded as a file, but its one user-scoped key —
  # top-level mcpServers — is mirrored separately by _sync_mcp_servers.
  SHARED_ITEMS = (
-@@ -572,11 +577,16 @@ class SessionManager:
+@@ -571,11 +576,16 @@ class SessionManager:
          identifier: str,
          claude_args: list[str],
          share: bool = True,
@@ -132,7 +132,7 @@ index 0beab429634e624d36b365544f83415e5a8cf4a5..f47dae80874e31413f4b973e8ed7afe4
          ``require_session`` turns the same-account fast path (a plain claude
          launch on the default login) into a refusal: a wrapper that hands a
          terminal to one account per session needs the isolation guaranteed,
-@@ -594,6 +604,11 @@ class SessionManager:
+@@ -593,6 +603,11 @@ class SessionManager:
                  "re-synced copies there, which would fork the history instead "
                  "of sharing it."
              )
@@ -144,7 +144,7 @@ index 0beab429634e624d36b365544f83415e5a8cf4a5..f47dae80874e31413f4b973e8ed7afe4
  
          account_num, email, org_uuid = self.switcher.resolve_account(identifier)
          # Guard before the same-account direct-launch fast path below (which
-@@ -631,6 +646,16 @@ class SessionManager:
+@@ -630,6 +645,16 @@ class SessionManager:
                          "default login — launching claude directly."
                      )
                  )
@@ -162,24 +162,23 @@ index 0beab429634e624d36b365544f83415e5a8cf4a5..f47dae80874e31413f4b973e8ed7afe4
  
          scrubbed = [v for v in AUTH_OVERRIDE_ENV_VARS if os.environ.get(v)]
 diff --git a/src/claude_swap/settings.py b/src/claude_swap/settings.py
-index 2c978f3678df8eb0a64291f55b1c8146612070c6..fd3d0df9f742b20dd021b94a56ffac7e2cd64415 100644
+index 038dc838214833311b7cb9408eea1d086c49fffa..3d5abc6437cb268c580ab3b1b76c458e0293d205 100644
 --- a/src/claude_swap/settings.py
 +++ b/src/claude_swap/settings.py
 @@ -2,7 +2,8 @@
  
  One versioned JSON file for user-tunable claude-swap preferences, written
  atomically with the backup dir's 0600/0700 modes. v1 carries the
--``autoswitch`` and ``ui`` sections; other sections can be added additively.
-+``autoswitch``, ``ui`` and ``session`` sections; other sections can be added
-+additively.
+-``autoswitch``, ``ui`` and ``updates`` sections; other sections can be added additively.
++``autoswitch``, ``ui``, ``updates`` and ``session`` sections; other sections
++can be added additively.
  Unknown keys (future fields, other tools' experiments) survive a round trip.
  
  Reading is forgiving — a missing or corrupt file yields defaults with a logged
-@@ -67,7 +68,28 @@ class UiSettings:
-     theme: str = "auto"
+@@ -86,10 +87,28 @@ class UpdateSettings:
+     check: bool = True
  
  
--_SECTION_DEFAULT_SOURCES = {"autoswitch": AutoSwitchSettings, "ui": UiSettings}
 +@dataclass(frozen=True)
 +class SessionSettings:
 +    """Session-mode preferences (``session`` section).
@@ -197,26 +196,26 @@ index 2c978f3678df8eb0a64291f55b1c8146612070c6..fd3d0df9f742b20dd021b94a56ffac7e
 +    share_history: bool = True
 +
 +
-+_SECTION_DEFAULT_SOURCES = {
-+    "autoswitch": AutoSwitchSettings,
-+    "ui": UiSettings,
+ _SECTION_DEFAULT_SOURCES = {
+     "autoswitch": AutoSwitchSettings,
+     "ui": UiSettings,
+     "updates": UpdateSettings,
 +    "session": SessionSettings,
-+}
+ }
  
  
- @dataclass(frozen=True)
-@@ -79,7 +101,7 @@ class SettingSpec:
+@@ -102,7 +121,7 @@ class SettingSpec:
      (`parse_setting_value`) read from here, so the two can't drift.
      """
  
--    section: str  # top-level JSON section ("autoswitch", "ui")
-+    section: str  # top-level JSON section ("autoswitch", "ui", "session")
+-    section: str  # top-level JSON section ("autoswitch", "ui", "updates")
++    section: str  # top-level JSON section ("autoswitch", "ui", "updates", "session")
      json_key: str  # camelCase key inside the section
      field: str  # snake_case AutoSwitchSettings field
      kind: str  # "float" | "int" | "bool" | "choice"
-@@ -139,6 +161,10 @@ SETTING_SPECS: dict[str, SettingSpec] = {
-             "ui", "theme", "theme", "choice", choices=("dark", "light", "auto"),
-             help="Color theme; auto follows the terminal background",
+@@ -170,6 +189,10 @@ SETTING_SPECS: dict[str, SettingSpec] = {
+             "updates", "check", "check", "bool",
+             help="Check PyPI once a day and print a hint when a newer release exists",
          ),
 +        SettingSpec(
 +            "session", "shareHistory", "share_history", "bool",
@@ -225,8 +224,8 @@ index 2c978f3678df8eb0a64291f55b1c8146612070c6..fd3d0df9f742b20dd021b94a56ffac7e
      )
  }
  
-@@ -248,6 +274,24 @@ def load_ui_settings(backup_root: Path) -> UiSettings:
-     return UiSettings(theme=theme)
+@@ -305,6 +328,24 @@ def load_update_settings(backup_root: Path) -> UpdateSettings:
+     return UpdateSettings(check=check)
  
  
 +def load_session_settings(backup_root: Path) -> SessionSettings:
@@ -250,19 +249,19 @@ index 2c978f3678df8eb0a64291f55b1c8146612070c6..fd3d0df9f742b20dd021b94a56ffac7e
  def save_settings(backup_root: Path, settings: AutoSwitchSettings) -> None:
      """Write the autoswitch section, preserving unknown keys and sections."""
      path = settings_path(backup_root)
-@@ -412,6 +456,7 @@ def effective_settings(backup_root: Path) -> list[tuple[SettingSpec, object, boo
-     loaded = {
+@@ -477,6 +518,7 @@ def effective_settings(backup_root: Path) -> list[tuple[SettingSpec, object, boo
          "autoswitch": load_settings(backup_root),
          "ui": load_ui_settings(backup_root),
+         "updates": load_update_settings(backup_root),
 +        "session": load_session_settings(backup_root),
      }
      rows = []
      for spec in SETTING_SPECS.values():
 diff --git a/tests/test_cli.py b/tests/test_cli.py
-index 17c0043123f6a9d1097ee4299c9498f864b3cb12..36e4c2824376b8d741af55b97965058eb21e0eee 100644
+index de563f9bbae877f803f11f92504888c782d16be5..dac99923516b5394cd67288d91142e6312192e1f 100644
 --- a/tests/test_cli.py
 +++ b/tests/test_cli.py
-@@ -741,7 +741,7 @@ class TestRunCommand:
+@@ -764,7 +764,7 @@ class TestRunCommand:
                  identifier,
                  claude_args,
                  share=True,
@@ -271,7 +270,7 @@ index 17c0043123f6a9d1097ee4299c9498f864b3cb12..36e4c2824376b8d741af55b97965058e
                  require_session=False,
              ):
                  calls.append((
-@@ -757,16 +757,17 @@ class TestRunCommand:
+@@ -780,16 +780,17 @@ class TestRunCommand:
          return calls
  
      def test_run_dispatches_with_defaults(self):
@@ -292,7 +291,7 @@ index 17c0043123f6a9d1097ee4299c9498f864b3cb12..36e4c2824376b8d741af55b97965058e
  
      def test_share_history_flag(self):
          calls = self._dispatch(["run", "2", "--share-history"])
-@@ -778,16 +779,16 @@ class TestRunCommand:
+@@ -801,16 +802,16 @@ class TestRunCommand:
  
      def test_require_session_flag(self):
          calls = self._dispatch(["run", "2", "--require-session"])
@@ -312,7 +311,7 @@ index 17c0043123f6a9d1097ee4299c9498f864b3cb12..36e4c2824376b8d741af55b97965058e
  
      def test_run_unknown_flag_errors(self, capsys):
          with patch.object(sys, "argv", ["claude-swap", "run", "2", "--bogus"]):
-@@ -832,7 +833,7 @@ class TestRunCommand:
+@@ -855,7 +856,7 @@ class TestRunCommand:
                  identifier,
                  claude_args,
                  share=True,
@@ -321,7 +320,7 @@ index 17c0043123f6a9d1097ee4299c9498f864b3cb12..36e4c2824376b8d741af55b97965058e
                  require_session=False,
              ):
                  from claude_swap.exceptions import SessionError
-@@ -941,7 +942,7 @@ class TestSubcommandAliases:
+@@ -964,7 +965,7 @@ class TestSubcommandAliases:
                  identifier,
                  claude_args,
                  share=True,
@@ -330,7 +329,7 @@ index 17c0043123f6a9d1097ee4299c9498f864b3cb12..36e4c2824376b8d741af55b97965058e
                  require_session=False,
              ):
                  calls.append((identifier, claude_args, share))
-@@ -1538,7 +1539,7 @@ class TestRunAutoResolve:
+@@ -1601,7 +1602,7 @@ class TestRunAutoResolve:
                  identifier,
                  claude_args,
                  share=True,
@@ -339,7 +338,7 @@ index 17c0043123f6a9d1097ee4299c9498f864b3cb12..36e4c2824376b8d741af55b97965058e
                  require_session=False,
              ):
                  calls.append(("run", identifier, claude_args, share, share_history))
-@@ -1585,7 +1586,7 @@ class TestRunAutoResolve:
+@@ -1648,7 +1649,7 @@ class TestRunAutoResolve:
               patch("os.geteuid", return_value=1000, create=True), \
               patch.object(sys, "argv", ["claude-swap", "run"]):
              cli.main()
@@ -348,7 +347,7 @@ index 17c0043123f6a9d1097ee4299c9498f864b3cb12..36e4c2824376b8d741af55b97965058e
  
      def test_mapped_subdir_inherits(self, tmp_path, monkeypatch):
          from claude_swap.mappings import MappingStore
-@@ -1609,7 +1610,7 @@ class TestRunAutoResolve:
+@@ -1672,7 +1673,7 @@ class TestRunAutoResolve:
               patch("os.geteuid", return_value=1000, create=True), \
               patch.object(sys, "argv", ["claude-swap", "run"]):
              cli.main()
@@ -357,7 +356,7 @@ index 17c0043123f6a9d1097ee4299c9498f864b3cb12..36e4c2824376b8d741af55b97965058e
  
      def test_unmapped_dir_falls_back_to_default(self, tmp_path, monkeypatch, capsys):
          backup = tmp_path / "backup"
-@@ -1658,7 +1659,7 @@ class TestRunAutoResolve:
+@@ -1721,7 +1722,7 @@ class TestRunAutoResolve:
               patch("os.geteuid", return_value=1000, create=True), \
               patch.object(sys, "argv", ["claude-swap", "run", "3"]):
              cli.main()
@@ -366,7 +365,7 @@ index 17c0043123f6a9d1097ee4299c9498f864b3cb12..36e4c2824376b8d741af55b97965058e
  
      def test_no_account_forwards_tail(self, tmp_path, monkeypatch):
          from claude_swap.mappings import MappingStore
-@@ -1681,7 +1682,7 @@ class TestRunAutoResolve:
+@@ -1744,7 +1745,7 @@ class TestRunAutoResolve:
               patch("os.geteuid", return_value=1000, create=True), \
               patch.object(sys, "argv", ["claude-swap", "run", "--", "--resume"]):
              cli.main()
@@ -376,33 +375,33 @@ index 17c0043123f6a9d1097ee4299c9498f864b3cb12..36e4c2824376b8d741af55b97965058e
      def test_no_account_forwards_share_history(self, tmp_path, monkeypatch):
          """--share-history survives the mapped-account resolution path."""
 diff --git a/tests/test_config_cli.py b/tests/test_config_cli.py
-index 51d835ae8ec5e8ef62571cdb48dfd09a848990e2..60d81f8758b742402a3cf4629235b784c372f585 100644
+index 613d1e6e1a5f24902959c9e8ea5814d33986b3ba..ac152ec66620875998e267c743d32d7c3a42ce66 100644
 --- a/tests/test_config_cli.py
 +++ b/tests/test_config_cli.py
-@@ -49,9 +49,10 @@ class TestConfigList:
-             "autoswitch.unhealthyTicks",
+@@ -51,9 +51,10 @@ class TestConfigList:
              "autoswitch.model",
              "ui.theme",
+             "updates.check",
 +            "session.shareHistory",
          ):
              assert key in out
--        assert out.count("(default)") == 9
-+        assert out.count("(default)") == 10
+-        assert out.count("(default)") == 11
++        assert out.count("(default)") == 12
  
      def test_set_key_not_marked_default(self, temp_home, capsys):
          _run(["set", "autoswitch.cooldownSeconds", "600"], capsys)
-@@ -78,7 +79,8 @@ class TestConfigList:
+@@ -80,7 +81,8 @@ class TestConfigList:
          assert payload["schemaVersion"] == 1
          assert payload["path"].endswith("settings.json")
          by_key = {entry["key"]: entry for entry in payload["settings"]}
--        assert len(by_key) == 9
-+        assert len(by_key) == 10
+-        assert len(by_key) == 11
++        assert len(by_key) == 12
 +        assert by_key["session.shareHistory"]["value"] is True
          assert by_key["autoswitch.threshold"]["value"] == 90.0
          assert by_key["autoswitch.threshold"]["isSet"] is False
-         assert by_key["autoswitch.includeApiKeyAccounts"]["value"] is False
+         # An unset weekly line reports null, not the threshold it falls back
 diff --git a/tests/test_session.py b/tests/test_session.py
-index c45ff3841afa49f33e8ae79097e3ee50d5f1b824..cd9c08b5ac21f644ba943e4e229364394837b071 100644
+index e1c4a72e3482ca3cad669157d5fbad820ff92eb1..87570c54598427cc22e19021f6d32cbd66f05ac6 100644
 --- a/tests/test_session.py
 +++ b/tests/test_session.py
 @@ -26,6 +26,7 @@ from claude_swap.exceptions import (
@@ -533,22 +532,23 @@ index c45ff3841afa49f33e8ae79097e3ee50d5f1b824..cd9c08b5ac21f644ba943e4e22936439
  class TestReadSessionCredentials:
      """The profile's current credential JSON: keychain first, then plaintext."""
 diff --git a/tests/test_settings.py b/tests/test_settings.py
-index cd0fe54a878568f54f33601b67d3676b302b70cb..f72e30a7a86dc39d91e7df1f0c7bb8787cf6c2e9 100644
+index 15be6adc8364a9987db94baf5ee42984fcb6f1f7..2d4cfa53f441806dd1330e5a45de617cded0e263 100644
 --- a/tests/test_settings.py
 +++ b/tests/test_settings.py
-@@ -15,8 +15,10 @@ from claude_swap.settings import (
+@@ -16,9 +16,11 @@ from claude_swap.settings import (
      SETTING_SPECS,
      atomic_write_json,
      AutoSwitchSettings,
 +    SessionSettings,
      UiSettings,
+     UpdateSettings,
      effective_settings,
 +    load_session_settings,
      load_settings,
      load_ui_settings,
-     merged_with_cli,
-@@ -152,6 +154,29 @@ class TestUiSettings:
-             set_setting(tmp_path, "ui.theme", "purple")
+     load_update_settings,
+@@ -177,6 +179,29 @@ class TestUpdateSettings:
+         assert "updates" not in json.loads(settings_path(tmp_path).read_text())
  
  
 +class TestSessionSettings:
@@ -577,21 +577,20 @@ index cd0fe54a878568f54f33601b67d3676b302b70cb..f72e30a7a86dc39d91e7df1f0c7bb878
  class TestSettingSpecs:
      def test_registry_covers_every_dataclass_field(self):
          by_section: dict[str, set[str]] = {}
-@@ -163,9 +188,16 @@ class TestSettingSpecs:
-         assert by_section["ui"] == {
-             f.name for f in UiSettings.__dataclass_fields__.values()
+@@ -191,12 +216,16 @@ class TestSettingSpecs:
+         assert by_section["updates"] == {
+             f.name for f in UpdateSettings.__dataclass_fields__.values()
          }
 +        assert by_section["session"] == {
 +            f.name for f in SessionSettings.__dataclass_fields__.values()
 +        }
  
      def test_defaults_match_dataclass(self):
--        sources = {"autoswitch": AutoSwitchSettings(), "ui": UiSettings()}
-+        sources = {
-+            "autoswitch": AutoSwitchSettings(),
-+            "ui": UiSettings(),
+         sources = {
+             "autoswitch": AutoSwitchSettings(),
+             "ui": UiSettings(),
+             "updates": UpdateSettings(),
 +            "session": SessionSettings(),
-+        }
+         }
          for spec in SETTING_SPECS.values():
              assert spec.default == getattr(sources[spec.section], spec.field)
- 
