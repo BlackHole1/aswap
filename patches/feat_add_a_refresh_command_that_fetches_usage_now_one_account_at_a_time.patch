@@ -23,10 +23,10 @@ when the server sent none) and keeps its last measurement on screen.
 Exit code 1 when any requested account could not be refreshed.
 
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index 4ef4b4e1424cef32c3de9d9182b0b2bee1b14a25..344e3250d445ccebf02eb2b1d61ff873fb4bbfd2 100644
+index e56fc5c2a9b3b3960bb9ab27ca594a21d4b23e3c..800234228466dc2da4b65a11fc0eae71f8390d84 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
-@@ -348,6 +348,46 @@ def _unmap_command(argv: list[str]) -> None:
+@@ -349,6 +349,46 @@ def _unmap_command(argv: list[str]) -> None:
          sys.exit(130)
  
  
@@ -73,7 +73,7 @@ index 4ef4b4e1424cef32c3de9d9182b0b2bee1b14a25..344e3250d445ccebf02eb2b1d61ff873
  def _unclaimed_command(argv: list[str]) -> None:
      """Handle `cswap unclaimed [--purge ID]` — inspect or drop a stash row.
  
-@@ -1010,6 +1050,9 @@ def main() -> None:
+@@ -1138,6 +1178,9 @@ def main() -> None:
      if argv and argv[0] == "unclaimed":
          _unclaimed_command(argv[1:])
          return
@@ -83,7 +83,7 @@ index 4ef4b4e1424cef32c3de9d9182b0b2bee1b14a25..344e3250d445ccebf02eb2b1d61ff873
      if argv and argv[0] == "alias":
          _alias_command(argv[1:])
          return
-@@ -1040,6 +1083,7 @@ Commands:
+@@ -1171,6 +1214,7 @@ Commands:
    %(prog)s help                       show this help
    %(prog)s list                       list managed accounts
    %(prog)s status                     show current account
@@ -92,10 +92,10 @@ index 4ef4b4e1424cef32c3de9d9182b0b2bee1b14a25..344e3250d445ccebf02eb2b1d61ff873
    %(prog)s switch <num|email>         switch to a specific account
    %(prog)s add                        add the current account
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index 8917ed78fa56cea58b3fc38f2fb1f0ad75a0d533..c27d245694a64e3c524c83b18ecd62f8a16048af 100644
+index 847059c278ea82c113d37e8eb44b24c7792829d8..1d2de1637741d4824da259ab93812616409bb1c9 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
-@@ -75,6 +75,7 @@ from claude_swap.printer import (
+@@ -80,6 +80,7 @@ from claude_swap.printer import (
      ide_short_name,
      muted,
      warning,
@@ -103,7 +103,7 @@ index 8917ed78fa56cea58b3fc38f2fb1f0ad75a0d533..c27d245694a64e3c524c83b18ecd62f8
  )
  from claude_swap.paths import (
      get_backup_root,
-@@ -257,6 +258,56 @@ def _usage_entry_lines(entry: UsageEntry) -> list[str]:
+@@ -262,6 +263,56 @@ def _usage_entry_lines(entry: UsageEntry) -> list[str]:
      return [dimmed(detail)]
  
  
@@ -160,7 +160,7 @@ index 8917ed78fa56cea58b3fc38f2fb1f0ad75a0d533..c27d245694a64e3c524c83b18ecd62f8
  def _label_token_status(source: str, credentials: str) -> str | None:
      """Return ``oauth.build_token_status`` relabelled by credential source."""
      status = oauth.build_token_status(credentials)
-@@ -5251,9 +5302,17 @@ class ClaudeAccountSwitcher:
+@@ -5455,9 +5506,17 @@ class ClaudeAccountSwitcher:
          fetch: set[str] | None = None,
          *,
          scheduled: bool = False,
@@ -178,7 +178,7 @@ index 8917ed78fa56cea58b3fc38f2fb1f0ad75a0d533..c27d245694a64e3c524c83b18ecd62f8
          ``fetch=None`` (on-demand callers: ``--list``/``--status``/switch
          strategies, dashboards) makes every account a candidate but respects
          the persisted poll plans; the auto engine passes an explicit set whose
-@@ -5327,6 +5386,7 @@ class ClaudeAccountSwitcher:
+@@ -5531,6 +5590,7 @@ class ClaudeAccountSwitcher:
                  identities,
                  respect_plans=False,
                  repair_overslept=scheduled,
@@ -186,7 +186,7 @@ index 8917ed78fa56cea58b3fc38f2fb1f0ad75a0d533..c27d245694a64e3c524c83b18ecd62f8
              )
          # An expired ACTIVE credential that cannot reach the fetch path (and
          # its locked refresh) this tick — failure backoff, a concurrent
-@@ -5363,6 +5423,8 @@ class ClaudeAccountSwitcher:
+@@ -5567,6 +5627,8 @@ class ClaudeAccountSwitcher:
              accepted_records = {
                  num: record for num, record in records.items() if num in accepted
              }
@@ -195,7 +195,7 @@ index 8917ed78fa56cea58b3fc38f2fb1f0ad75a0d533..c27d245694a64e3c524c83b18ecd62f8
              for num, record in accepted_records.items():
                  if record.sentinel is not None:
                      sentinels[num] = record.sentinel
-@@ -5919,6 +5981,59 @@ class ClaudeAccountSwitcher:
+@@ -6131,6 +6193,59 @@ class ClaudeAccountSwitcher:
          except Exception:
              self._logger.debug("Failed to detect running instances", exc_info=True)
  
