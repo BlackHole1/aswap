@@ -76,10 +76,10 @@ session and desktop profiles.
 
 diff --git a/src/claude_swap/chrome.py b/src/claude_swap/chrome.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..0e05cad8d5a931b78bdeace2159704ca77603a9e
+index 0000000000000000000000000000000000000000..82936073c0e99ec78f3a21f444804331443f11a7
 --- /dev/null
 +++ b/src/claude_swap/chrome.py
-@@ -0,0 +1,860 @@
+@@ -0,0 +1,861 @@
 +"""Chrome with Claude in Chrome, one browser profile per stored account.
 +
 +``cswap switch`` moves Claude Code to another account, but the Claude in
@@ -896,9 +896,10 @@ index 0000000000000000000000000000000000000000..0e05cad8d5a931b78bdeace2159704ca
 +    def ensure_closed(self, account_num: str, email: str, action: str) -> None:
 +        """Refuse ``action`` while the account's browser is open, or while
 +        a failed process check leaves that unknown."""
-+        pids = running_pids(
-+            self.data_dir(account_num, email), self.platform, strict=True
-+        )
++        data_dir = self.data_dir(account_num, email)
++        if not data_dir.exists():
++            return  # no profile, nothing to pull out from under a process
++        pids = running_pids(data_dir, self.platform, strict=True)
 +        if pids:
 +            raise SessionError(
 +                f"Chrome is open for account {account_num} ({email}), "
@@ -1294,10 +1295,10 @@ index c49518231c374578b54fadd99c8c20ac7791de2d..c6f24d730ad74f44bc284ec3ba8e327d
          if self.backup_dir.exists():
 diff --git a/tests/test_chrome.py b/tests/test_chrome.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..f293ff5d852bb3ffa16ad33411042397d6342d39
+index 0000000000000000000000000000000000000000..26e34ac02e524712b8252c7bbdfb6fb80b03db47
 --- /dev/null
 +++ b/tests/test_chrome.py
-@@ -0,0 +1,453 @@
+@@ -0,0 +1,455 @@
 +"""``cswap chrome``: Chrome with Claude in Chrome, one profile per stored account.
 +
 +The extension works as whoever is signed in to claude.ai in the browser,
@@ -1606,6 +1607,7 @@ index 0000000000000000000000000000000000000000..f293ff5d852bb3ffa16ad33411042397
 +
 +class TestLifecycle:
 +    def test_remove_refuses_while_the_browser_is_open(self, switcher):
++        chrome_dir_for(switcher.backup_dir, "2", "account2@example.com").mkdir(parents=True)
 +        with patch.object(chrome, "running_pids", return_value=[12]), \
 +             patch("claude_swap.desktop.running_pids", return_value=[]), \
 +             patch.object(switcher, "_ensure_no_live_session"), \
@@ -1615,6 +1617,7 @@ index 0000000000000000000000000000000000000000..f293ff5d852bb3ffa16ad33411042397
 +        creds.assert_not_called()
 +
 +    def test_remove_checks_strictly_before_deleting(self, switcher):
++        chrome_dir_for(switcher.backup_dir, "2", "account2@example.com").mkdir(parents=True)
 +        with patch.object(chrome, "running_pids", return_value=[]) as pids, \
 +             patch("claude_swap.desktop.running_pids", return_value=[]), \
 +             patch.object(switcher, "_ensure_no_live_session"), \

@@ -167,10 +167,10 @@ index 9777aca429c403eb1e81bfbf2d9ce7e44a74ce1c..14e985d4be4c4cd72ecaa04b70c46ca1
  
 diff --git a/src/claude_swap/desktop.py b/src/claude_swap/desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..bdb20572af92dbea475629c8f681aba9bcb0fb36
+index 0000000000000000000000000000000000000000..4831085cf20ff6cf02531600b1b9d972e6628892
 --- /dev/null
 +++ b/src/claude_swap/desktop.py
-@@ -0,0 +1,683 @@
+@@ -0,0 +1,684 @@
 +"""Claude Desktop, one window per stored account.
 +
 +Claude Desktop holds one login per profile: to use a second account the
@@ -810,9 +810,10 @@ index 0000000000000000000000000000000000000000..bdb20572af92dbea475629c8f681aba9
 +    def ensure_closed(self, account_num: str, email: str, action: str) -> None:
 +        """Refuse ``action`` while the account's window is open, or while
 +        a failed process check leaves that unknown."""
-+        pids = running_pids(
-+            self.data_dir(account_num, email), self.platform, strict=True
-+        )
++        data_dir = self.data_dir(account_num, email)
++        if not data_dir.exists():
++            return  # no profile, nothing to pull out from under a process
++        pids = running_pids(data_dir, self.platform, strict=True)
 +        if pids:
 +            raise SessionError(
 +                f"Claude Desktop is open for account {account_num} ({email}), "
@@ -1054,10 +1055,10 @@ index 460e711d72e512963d1603c565c75281c97773df..c82e9ea4ff191b360bed82614740a2b6
          assert by_key["autoswitch.threshold"]["isSet"] is False
 diff --git a/tests/test_desktop.py b/tests/test_desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..10f4268b2dcd19f1a209a8a1e54a600bc1e822f9
+index 0000000000000000000000000000000000000000..db7217028c6494a0a82eab6ce77c87f7eab2e4c3
 --- /dev/null
 +++ b/tests/test_desktop.py
-@@ -0,0 +1,741 @@
+@@ -0,0 +1,751 @@
 +"""``cswap desktop``: Claude Desktop, one window per stored account.
 +
 +Claude Desktop keeps one login per profile, and Electron honors
@@ -1639,7 +1640,16 @@ index 0000000000000000000000000000000000000000..10f4268b2dcd19f1a209a8a1e54a600b
 +
 +
 +class TestLifecycle:
++    def test_remove_skips_the_check_without_a_profile(self, switcher):
++        with patch.object(desktop, "running_pids") as pids, \
++             patch.object(switcher, "_ensure_no_live_session"), \
++             patch.object(switcher, "_delete_account_credentials") as creds:
++            switcher._delete_account_files("2", "account2@example.com")
++        pids.assert_not_called()
++        creds.assert_called_once()
++
 +    def test_remove_refuses_while_the_window_is_open(self, switcher, monkeypatch):
++        desktop_dir_for(switcher.backup_dir, "2", "account2@example.com").mkdir(parents=True)
 +        with patch.object(desktop, "running_pids", return_value=[12]), \
 +             patch.object(switcher, "_ensure_no_live_session"), \
 +             patch.object(switcher, "_delete_account_credentials") as creds:
@@ -1648,6 +1658,7 @@ index 0000000000000000000000000000000000000000..10f4268b2dcd19f1a209a8a1e54a600b
 +        creds.assert_not_called()
 +
 +    def test_remove_refuses_when_the_window_check_fails(self, switcher):
++        desktop_dir_for(switcher.backup_dir, "2", "account2@example.com").mkdir(parents=True)
 +        with patch.object(desktop.subprocess, "run", side_effect=OSError("no pgrep")), \
 +             patch.object(switcher, "_ensure_no_live_session"), \
 +             patch.object(switcher, "_delete_account_credentials") as creds:
