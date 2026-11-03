@@ -24,7 +24,7 @@ directory when it exists, since it lives inside the backup dir that purge
 removes.
 
 diff --git a/src/claude_swap/session.py b/src/claude_swap/session.py
-index fb0cda4b9c97e5165d702176c289d346d8486f35..118da7e47206e7c7c25bf0dd55d0d00de49775ab 100644
+index e98988bec860dda7a761cdf18cde4971e2e4cb1f..0df33ab6031248837250f4a16b175e296a6ce505 100644
 --- a/src/claude_swap/session.py
 +++ b/src/claude_swap/session.py
 @@ -36,6 +36,7 @@ session-aware guards); it receives a ``ClaudeAccountSwitcher`` instance.
@@ -62,10 +62,10 @@ index fb0cda4b9c97e5165d702176c289d346d8486f35..118da7e47206e7c7c25bf0dd55d0d00d
              try:
 -                self._merge_history_into_source(src, dest)
 +                set_aside = self._merge_history_into_source(src, dest, conflicts)
-             except OSError as e:
-                 self._logger.warning(
-                     f"Could not merge {dest.name} into {src}: {e}"
-@@ -1421,6 +1435,16 @@ class SessionManager:
+             except (OSError, ValueError) as e:
+                 # ValueError covers UnicodeDecodeError: a byte-corrupt
+                 # history file is "nothing readable to merge", and losing a
+@@ -1425,6 +1439,16 @@ class SessionManager:
                      f"{src} — conversation history is now shared."
                  )
              )
@@ -82,7 +82,7 @@ index fb0cda4b9c97e5165d702176c289d346d8486f35..118da7e47206e7c7c25bf0dd55d0d00d
          if not src.exists():
              # Fresh ~/.claude (or first run): seed an empty share target so
              # the generic loop below has something to link.
-@@ -1439,15 +1463,22 @@ class SessionManager:
+@@ -1443,16 +1467,23 @@ class SessionManager:
          return True
  
      @staticmethod
@@ -93,8 +93,8 @@ index fb0cda4b9c97e5165d702176c289d346d8486f35..118da7e47206e7c7c25bf0dd55d0d00d
 -        Directories merge file-by-file (transcript filenames are UUIDs, so
 -        collisions mean identical sessions — first writer wins and the
 -        duplicate is dropped). ``history.jsonl`` merges by appending lines
--        not already present. ``dest`` is removed once empty; any failure
--        raises OSError and leaves remaining files in place for the next try.
+-        not already present. ``dest`` is removed once empty; any failure —
+-        an OSError, or a UnicodeDecodeError on a byte-corrupt history file —
 +        Directories merge file-by-file. A file that already exists under
 +        ``src`` is dropped only when both copies are byte-identical; a
 +        differing copy is moved to ``conflicts/<dest.name>/<relative path>``
@@ -103,15 +103,16 @@ index fb0cda4b9c97e5165d702176c289d346d8486f35..118da7e47206e7c7c25bf0dd55d0d00d
 +        exist on both sides with different content (a session continued in
 +        the profile after an un-share), and ``memory/MEMORY.md`` is one fixed
 +        name per project. ``history.jsonl`` merges by appending lines not
-+        already present. ``dest`` is removed once empty; any failure raises
-+        OSError and leaves remaining files in place for the next try.
++        already present. ``dest`` is removed once empty; any failure (an
++        OSError, or a UnicodeDecodeError on a byte-corrupt history file)
+         propagates and leaves remaining files in place for the next try.
 +        Returns how many files were set aside.
          """
 +        set_aside = 0
          if dest.is_dir():
              _mkdir_private(src)
              for path in sorted(dest.rglob("*"), reverse=True):
-@@ -1457,8 +1488,11 @@ class SessionManager:
+@@ -1462,8 +1493,11 @@ class SessionManager:
                      path.rmdir()  # children already moved (reverse walk)
                      continue
                  if target.exists():
@@ -125,19 +126,19 @@ index fb0cda4b9c97e5165d702176c289d346d8486f35..118da7e47206e7c7c25bf0dd55d0d00d
                  _mkdir_private(target.parent)
                  shutil.move(str(path), str(target))
              dest.rmdir()
-@@ -1478,6 +1512,7 @@ class SessionManager:
+@@ -1490,6 +1524,7 @@ class SessionManager:
                  with src.open("a", encoding="utf-8") as f:
-                     f.write("\n".join(lines) + "\n")
+                     f.write(terminator + "\n".join(lines) + "\n")
              dest.unlink()
 +        return set_aside
  
      @staticmethod
      def _read_manifest(manifest_path: Path) -> list[str]:
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index 1d2de1637741d4824da259ab93812616409bb1c9..f9d79cead2d7b3f1045102f0cea2e57905cacc5f 100644
+index a381a8f25d6d864ba50484620a5ead07930a0998..ca97a043f000b744b50b218cefd7b4cb5d69fe57 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
-@@ -7960,7 +7960,7 @@ class ClaudeAccountSwitcher:
+@@ -7981,7 +7981,7 @@ class ClaudeAccountSwitcher:
              if sessions_root.is_dir()
              else []
          )
@@ -146,7 +147,7 @@ index 1d2de1637741d4824da259ab93812616409bb1c9..f9d79cead2d7b3f1045102f0cea2e579
  
          live = {}
          unreadable = {}
-@@ -7992,6 +7992,11 @@ class ClaudeAccountSwitcher:
+@@ -8013,6 +8013,11 @@ class ClaudeAccountSwitcher:
  
          warning("This will remove ALL claude-swap data from your system:")
          print(f"  - Backup directory: {self.backup_dir}")
@@ -159,7 +160,7 @@ index 1d2de1637741d4824da259ab93812616409bb1c9..f9d79cead2d7b3f1045102f0cea2e579
              print(f"  - Legacy backup directory: {legacy}")
          if self.platform == Platform.MACOS:
 diff --git a/tests/test_session.py b/tests/test_session.py
-index f6cb9db1574512172336140409d98de12f66636e..e1c4a72e3482ca3cad669157d5fbad820ff92eb1 100644
+index eb826e402a40b958800efe0614edba1cc642de1f..5074d56822038ec44eb607451dc53104b9b9153c 100644
 --- a/tests/test_session.py
 +++ b/tests/test_session.py
 @@ -27,6 +27,7 @@ from claude_swap.exceptions import (
@@ -235,7 +236,7 @@ index f6cb9db1574512172336140409d98de12f66636e..e1c4a72e3482ca3cad669157d5fbad82
 +        assert "file(s)" not in capsys.readouterr().out
 +        assert not (mgr.switcher.backup_dir / HISTORY_CONFLICTS_DIRNAME).exists()
  
-     def test_merge_deferred_while_profile_live(self, history_setup, monkeypatch):
+     def test_merge_keeps_an_unterminated_shared_line_whole(self, history_setup):
          source, session_dir, mgr = history_setup
 diff --git a/tests/test_switcher.py b/tests/test_switcher.py
 index 19403f033378ee3ca57707a1f0cdc3a6e66407ed..f88fee37782a21a849e24c8d75657d71b9c309f2 100644
