@@ -6,15 +6,13 @@
 
 <img src="../images/cswap-list.png" alt="cswap list: two accounts with their 5h, 7d and per-model usage, then cswap switch 2" width="820">
 
-Claude Code 的账户切换工具：[claude-swap](https://github.com/realiti4/claude-swap) (`cswap`) 加上一组持续维护的修复。
+基于 [claude-swap](https://github.com/realiti4/claude-swap) 的 Claude Code 多账户切换工具，附带一组持续维护的修复和新功能。
 
 </div>
 
-`cswap` 可在多个 Claude 账户之间切换，跟踪每个账户的用量，并把你切到余量最多的账户。aswap 是同一套工具，基于未改动的上游源码，加上一小份补丁，用来修上游还没处理的问题。你用的还是 `cswap` 命令。
+`cswap` 用来管理多个 Claude 账户。它会记录每个账户的用量，并能切换到剩余额度最多的账户。aswap 使用未经修改的上游源码构建 `cswap`，再在其上应用一小组补丁。所有 `cswap` 命令保持原样可用。
 
-## 名字
-
-aswap 是 **account swap** (账户切换) 的缩写，说的就是这个工具做的事。和 `cswap` 放在一起时，那个 `a` 也是本项目加上去的部分：aswap 就是 cswap 加一组补丁。Claude Code 正在变成通用的 agent 运行环境，这个 `a` 也对应随之出现的 AI 与 agent 账户。
+名字取自 **account swap**。
 
 ## 安装
 
@@ -23,52 +21,69 @@ uv tool install aswap  # 或：pipx install aswap
 aswap --version
 ```
 
-`aswap` 接受 `cswap` 的全部用法，可以和上游的 `cswap` 一起安装，互不影响。若希望用 `cswap` 这个名字运行 aswap：
+`aswap` 支持所有 `cswap` 命令。它可以和上游 `cswap` 同时安装，不会改动后者。
+
+如果也想用 `cswap` 这个名字运行 aswap：
 
 ```bash
-aswap link  # 在 aswap 旁边创建一个 cswap 启动器；aswap unlink 可移除
+aswap link    # 在 aswap 旁边创建 cswap 启动器
+aswap unlink  # 移除该启动器
 ```
 
-`aswap link` 只会替换由它自己创建的 `cswap`。请先卸载上游 (`uv tool uninstall claude-swap`)，或加上 `--force`。
+`aswap link` 只会替换由 aswap 安装创建的 `cswap` 启动器。如需替换上游 `cswap`，请先卸载上游 (`uv tool uninstall claude-swap`)，或加上 `--force`。
 
-## 升级
+升级时运行 `aswap upgrade`。它会根据安装方式调用 `uv tool upgrade` 或 `pipx upgrade`。
 
-```bash
-aswap upgrade  # 按安装方式执行 uv tool upgrade aswap 或 pipx upgrade aswap
-```
+## aswap 新增了什么
 
-从源码构建，以及用打过补丁的版本替换已安装的 PyPI `cswap`，见 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
+### 按需刷新用量
 
-## 补丁修复了什么
-
-`cswap refresh` 立即逐个账户拉取用量，并给出被限流账户可重试的时间：
+`cswap refresh [account ...]` 会立即逐个账户拉取用量。对于被限流的账户，会显示服务端允许下次重试的时间。
 
 <img src="../images/cswap-refresh.png" alt="cswap refresh: one account refreshed, the other rate limited with the server retry time" width="820">
 
-`cswap desktop --all` 为每个已存账户打开一个独立的 Claude Desktop 窗口，各自保持登录：
+### 每个账户一个 Claude Desktop 窗口
+
+Claude Desktop 同一时间只能登录一个账户。`cswap desktop 2` 会在独立窗口中打开账户 2，并保持其各自的登录状态；`cswap desktop --all` 会打开所有账户。每个窗口的 Code 标签页都显示相同的本地会话 (Windows 除外)。实现思路参考了 [guise](https://github.com/siddhjagani/guise)。
 
 <img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
-`cswap chrome 2` 在默认 Chrome profile 的一份副本里打开账户 2，那里的 Claude in Chrome 扩展以账户 2 工作，默认浏览器保持原来的登录：
+### 每个账户一个 Chrome profile
+
+Claude in Chrome 使用浏览器里登录的 claude.ai 账户，而不是 `cswap switch` 选中的账户 ([上游 #256](https://github.com/realiti4/claude-swap/issues/256))。`cswap chrome 2` 会用你的 Chrome profile 的一份独立副本打开账户 2。其中的扩展以账户 2 运行，主浏览器的登录不受影响。
 
 <img src="../images/cswap-chrome.png" alt="cswap chrome 2 opening a copy of the stock Chrome profile for account 2, cswap chrome 1 opening account 1, then cswap chrome listing both as open" width="820">
 
-| 补丁                                                                                                                            | 问题                                                                                                                                                                                                                                                                                                                   |
-| ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [跟随当前凭据的真正所有者](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch)        | 过期的 `~/.claude.json` 可能仍写着账户 B，钥匙串里却已是账户 A 的 token。上游会把 A 标成需要重新登录，也不再刷新 B。                                                                                                                                                                                                   |
-| [跟随实际安装的发行版](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)               | 版本号、更新检查和 `upgrade` 写死了 `claude-swap`，安装成 `aswap` 后会失效。                                                                                                                                                                                                                                           |
-| [按需刷新用量](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)                     | 用量只按上游自己的节奏刷新，界面一直显示缓存的数字，也不显示服务端允许重试的时间。`cswap refresh [账户 ...]` 会立即逐个账户抓取。                                                                                                                                                                                      |
-| [合并历史时不丢文件](../../patches/fix_set_aside_a_differing_history_file_instead_of_dropping_the_profiles_copy.patch)          | 把 profile 的历史并入 `~/.claude` 时，同名文件不看内容就被删掉，之后的会话或 `memory/MEMORY.md` 会丢失。内容不同的文件留在 `history-conflicts/`。                                                                                                                                                                      |
-| [共享同一份会话历史](../../patches/feat_share_one_conversation_history_across_accounts_by_default.patch)                        | 每次启动如果不带 `--share-history`，切换默认账户后 `claude --resume` 就找不到之前的对话 (上游 #239)。现在默认共享 (`run.shareHistory`)。                                                                                                                                                                               |
-| [按账户打开 Claude Desktop](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)            | Claude Desktop 每个 profile 只保留一个登录，换账户就要先登出再登录。`cswap desktop 2` 在独立窗口打开账户 2，其他窗口可以同时开着，做法同 [guise](https://github.com/siddhjagani/guise)。Code 标签页仍能看到同样的本地会话。                                                                                            |
-| [按账户打开 Chrome (Claude in Chrome)](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch) | Claude in Chrome 跟着浏览器里的 claude.ai 登录，而不是 `cswap switch` 刚切到的账户 (上游 #256)。`cswap chrome 2` 用独立的 Chrome profile 打开账户 2。关掉该窗口后，`cswap chrome --sync 2` 会再复制一份你的 profile。`chrome.followSwitch` 会在切换时把窗口带到前台，`chrome.appPath` 可指向 Edge、Brave 或 Chromium。 |
+- `cswap chrome --sync 2` 会把当前的 Chrome profile 重新复制到账户 2。执行前请先关闭该账户的窗口。
+- `cswap config set chrome.followSwitch true` 会在 `cswap switch` 时把对应账户的浏览器窗口带到前台。
+- `cswap config set chrome.appPath <path>` 可以改用其他 Chromium 内核浏览器，例如 Edge 或 Brave。
 
-每个补丁都是一次提交。提交信息说明上游的问题。完整列表见 [patches/.patches](../../patches/.patches)。
+### 共享会话历史
+
+`cswap run` 默认让所有账户共享同一份会话历史。切换账户后，`claude --resume` 仍能找到之前的对话 ([上游 #239](https://github.com/realiti4/claude-swap/issues/239))。如需按账户分开保存，运行 `cswap config set run.shareHistory false`。暂不支持 Windows。
+
+### 问题修复
+
+- **账户配置过期。** 如果 `~/.claude.json` 仍指向账户 B，而钥匙串中已是账户 A 的 token，上游会要求重新登录 A，并停止刷新 B。aswap 会以实际持有当前 token 的账户为准。
+- **历史文件丢失。** 上游把 profile 的历史合并到 `~/.claude` 时，会不加比较地删除同名文件，可能导致会话或 `memory/MEMORY.md` 丢失。aswap 会把内容不同的文件另存到 `history-conflicts/`。
+- **版本与升级。** `--version`、更新检查和 `upgrade` 都写死了 `claude-swap` 包名。aswap 会使用实际安装的包。
 
 ## 构建方式
 
-项目在 `upstream.json` 里固定一个上游 commit，原样克隆到 `cswap/`，所有改动都以普通的 `git am` 补丁放在 `patches/` 下，按 `patches/.patches` 列出的顺序应用。这和 [Electron 管理 Node 与 Chromium 补丁的方式](https://github.com/electron/electron/tree/main/patches) 相同：差异保持小、易读，升级上游就是对补丁序列做一次 rebase。细节、命令和补丁工作流见 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
+`upstream.json` 固定了一个上游 commit。`bun run setup` 会把该 commit 原样克隆到 `cswap/`，再按 [patches/.patches](../../patches/.patches) 中的顺序，用 `git am` 应用 `patches/` 下的所有补丁。这套结构参考了 [Electron 管理 Chromium 和 Node 补丁的方式](https://github.com/electron/electron/tree/main/patches)。每个 diff 都保持小而易读，升级上游只需对补丁序列做一次 rebase。
+
+| 补丁                                                                                                                       | 变更                  |
+| -------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| [以当前凭据的实际所有者为准](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | 修复：账户配置过期    |
+| [以实际安装的发行包为准](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)        | 修复：版本与升级      |
+| [按需刷新用量](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)                | 功能：`cswap refresh` |
+| [合并历史时保留文件](../../patches/fix_set_aside_a_differing_history_file_instead_of_dropping_the_profiles_copy.patch)     | 修复：历史文件丢失    |
+| [共享同一份会话历史](../../patches/feat_share_one_conversation_history_across_accounts_by_default.patch)                   | 功能：共享会话历史    |
+| [按账户打开 Claude Desktop](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)       | 功能：`cswap desktop` |
+| [按账户打开 Chrome](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)               | 功能：`cswap chrome`  |
+
+每个补丁对应一个 commit，提交信息中说明了对应的上游问题。如需从源码构建或修改补丁，请参阅 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
 
 ## 许可证
 
-MIT，与 claude-swap 相同。见 [LICENSE](../../LICENSE)。
+MIT，与 claude-swap 相同。详见 [LICENSE](../../LICENSE)。
