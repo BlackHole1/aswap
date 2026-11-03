@@ -76,10 +76,10 @@ session and desktop profiles.
 
 diff --git a/src/claude_swap/chrome.py b/src/claude_swap/chrome.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..6e342428d94d742dfcf70bd0d7d1d56b43d6ca54
+index 0000000000000000000000000000000000000000..82936073c0e99ec78f3a21f444804331443f11a7
 --- /dev/null
 +++ b/src/claude_swap/chrome.py
-@@ -0,0 +1,851 @@
+@@ -0,0 +1,861 @@
 +"""Chrome with Claude in Chrome, one browser profile per stored account.
 +
 +``cswap switch`` moves Claude Code to another account, but the Claude in
@@ -894,8 +894,12 @@ index 0000000000000000000000000000000000000000..6e342428d94d742dfcf70bd0d7d1d56b
 +    # -- lifecycle hooks used by the switcher ------------------------------
 +
 +    def ensure_closed(self, account_num: str, email: str, action: str) -> None:
-+        """Refuse ``action`` while the account's browser is open."""
-+        pids = running_pids(self.data_dir(account_num, email), self.platform)
++        """Refuse ``action`` while the account's browser is open, or while
++        a failed process check leaves that unknown."""
++        data_dir = self.data_dir(account_num, email)
++        if not data_dir.exists():
++            return  # no profile, nothing to pull out from under a process
++        pids = running_pids(data_dir, self.platform, strict=True)
 +        if pids:
 +            raise SessionError(
 +                f"Chrome is open for account {account_num} ({email}), "
@@ -908,12 +912,18 @@ index 0000000000000000000000000000000000000000..6e342428d94d742dfcf70bd0d7d1d56b
 +        extension go with it."""
 +        data_dir = self.data_dir(account_num, email)
 +        if data_dir.exists():
-+            shutil.rmtree(data_dir, ignore_errors=True)
++            try:
++                shutil.rmtree(data_dir)
++            except OSError as exc:
++                raise SessionError(
++                    f"Could not remove the Chrome profile {data_dir}: {exc}"
++                ) from exc
 +
-+    def open_profile_dirs(self) -> dict[str, list[int]]:
++    def open_profile_dirs(self, *, strict: bool = False) -> dict[str, list[int]]:
 +        """``{dir name: pids}`` for every profile with a browser open, by
 +        scanning ``chrome/`` itself so a profile whose account is gone
-+        still counts."""
++        still counts. ``strict`` raises on a failed check, as in
++        ``running_pids``."""
 +        root = self.switcher.backup_dir / CHROME_DIRNAME
 +        if not root.is_dir():
 +            return {}
@@ -921,7 +931,7 @@ index 0000000000000000000000000000000000000000..6e342428d94d742dfcf70bd0d7d1d56b
 +        for d in sorted(root.iterdir()):
 +            if not d.is_dir():
 +                continue
-+            pids = running_pids(d, self.platform)
++            pids = running_pids(d, self.platform, strict=strict)
 +            if pids:
 +                live[d.name] = pids
 +        return live
@@ -1211,26 +1221,24 @@ index 003767966e1e31e2712bfbef7144cdf430b98485..e03062c0515e57ba55853820f7e4d464
      rows = []
      for spec in SETTING_SPECS.values():
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index 87c0d1d3846fef5da666b8a7832606b0961be3f8..25cc890b96c294c8f163c0653138c7d98c991d90 100644
+index c49518231c374578b54fadd99c8c20ac7791de2d..c6f24d730ad74f44bc284ec3ba8e327d6a806223 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
-@@ -959,12 +959,15 @@ class ClaudeAccountSwitcher:
+@@ -975,9 +975,12 @@ class ClaudeAccountSwitcher:
          self._ensure_no_live_session(account_num, email, "the operation")
          desktop = self._desktop_manager()
          desktop.ensure_closed(account_num, email, "the operation")
+-        # The app profile goes first: it holds a login of its own, so one
 +        chrome = self._chrome_manager()
 +        chrome.ensure_closed(account_num, email, "the operation")
++        # The app profiles go first: each holds a login of its own, so one
+         # that fails to delete must leave the account in place to retry.
+         desktop.delete_profile(account_num, email)
++        chrome.delete_profile(account_num, email)
          self._delete_account_credentials(account_num, email)
          config_file = self.configs_dir / f".claude-config-{account_num}-{email}.json"
          if config_file.exists():
-             config_file.unlink()
-         self._delete_session_profile(account_num, email)
-         desktop.delete_profile(account_num, email)
-+        chrome.delete_profile(account_num, email)
- 
-     def _desktop_manager(self):
-         """The account's Claude Desktop windows and profiles (see desktop.py)."""
-@@ -972,6 +975,12 @@ class ClaudeAccountSwitcher:
+@@ -990,6 +993,12 @@ class ClaudeAccountSwitcher:
  
          return DesktopManager(self)
  
@@ -1243,12 +1251,12 @@ index 87c0d1d3846fef5da666b8a7832606b0961be3f8..25cc890b96c294c8f163c0653138c7d9
      def _prune_mappings(self, email: str, org_uuid: str) -> None:
          """Drop directory mappings for an identity that no longer has a slot.
  
-@@ -8037,6 +8046,23 @@ class ClaudeAccountSwitcher:
+@@ -8078,6 +8087,23 @@ class ClaudeAccountSwitcher:
              if desktop_root.is_dir()
              else []
          )
 +        # And Chrome profiles: their cookie jar is the extension's login.
-+        chrome_live = self._chrome_manager().open_profile_dirs()
++        chrome_live = self._chrome_manager().open_profile_dirs(strict=True)
 +        if chrome_live:
 +            details = "; ".join(
 +                f"{name} (PID {', '.join(map(str, pids))})"
@@ -1267,7 +1275,7 @@ index 87c0d1d3846fef5da666b8a7832606b0961be3f8..25cc890b96c294c8f163c0653138c7d9
  
          warning("This will remove ALL claude-swap data from your system:")
          print(f"  - Backup directory: {self.backup_dir}")
-@@ -8055,6 +8081,8 @@ class ClaudeAccountSwitcher:
+@@ -8096,6 +8122,8 @@ class ClaudeAccountSwitcher:
              print("  - All session profiles and their Keychain entries")
          if desktop_profiles:
              print("  - All Claude Desktop profiles (each account's desktop login)")
@@ -1276,7 +1284,7 @@ index 87c0d1d3846fef5da666b8a7832606b0961be3f8..25cc890b96c294c8f163c0653138c7d9
          print()
          print(dimmed("Note: This does NOT affect your current Claude Code login."))
          print()
-@@ -8118,6 +8146,8 @@ class ClaudeAccountSwitcher:
+@@ -8159,6 +8187,8 @@ class ClaudeAccountSwitcher:
              removed_items.append(
                  f"Claude Desktop profiles: {', '.join(desktop_profiles)}"
              )
@@ -1287,10 +1295,10 @@ index 87c0d1d3846fef5da666b8a7832606b0961be3f8..25cc890b96c294c8f163c0653138c7d9
          if self.backup_dir.exists():
 diff --git a/tests/test_chrome.py b/tests/test_chrome.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..ae31450f042190169ce926a4a6c2fb5cc989649a
+index 0000000000000000000000000000000000000000..26e34ac02e524712b8252c7bbdfb6fb80b03db47
 --- /dev/null
 +++ b/tests/test_chrome.py
-@@ -0,0 +1,433 @@
+@@ -0,0 +1,455 @@
 +"""``cswap chrome``: Chrome with Claude in Chrome, one profile per stored account.
 +
 +The extension works as whoever is signed in to claude.ai in the browser,
@@ -1568,7 +1576,7 @@ index 0000000000000000000000000000000000000000..ae31450f042190169ce926a4a6c2fb5c
 +        orphan.mkdir(parents=True)
 +        with patch.object(
 +            chrome, "running_pids",
-+            side_effect=lambda d, p=None: [77] if d.name.startswith("9-") else [],
++            side_effect=lambda d, p=None, **_: [77] if d.name.startswith("9-") else [],
 +        ), patch.object(chrome, "quit_instance", return_value=True) as quit:
 +            assert manager.quit([], all_accounts=True) == 0
 +        assert [c.args[0].name for c in quit.call_args_list] == [
@@ -1582,7 +1590,7 @@ index 0000000000000000000000000000000000000000..ae31450f042190169ce926a4a6c2fb5c
 +        manager.data_dir("2", "account2@example.com").mkdir(parents=True)
 +        with patch.object(
 +            chrome, "running_pids",
-+            side_effect=lambda d, p=None: [31] if d.name.startswith("1-") else [],
++            side_effect=lambda d, p=None, **_: [31] if d.name.startswith("1-") else [],
 +        ):
 +            manager.show()
 +        out = _plain(capsys.readouterr().out)
@@ -1599,11 +1607,33 @@ index 0000000000000000000000000000000000000000..ae31450f042190169ce926a4a6c2fb5c
 +
 +class TestLifecycle:
 +    def test_remove_refuses_while_the_browser_is_open(self, switcher):
++        chrome_dir_for(switcher.backup_dir, "2", "account2@example.com").mkdir(parents=True)
 +        with patch.object(chrome, "running_pids", return_value=[12]), \
 +             patch("claude_swap.desktop.running_pids", return_value=[]), \
 +             patch.object(switcher, "_ensure_no_live_session"), \
 +             patch.object(switcher, "_delete_account_credentials") as creds:
 +            with pytest.raises(SessionError, match="Chrome is open .*--quit 2"):
++                switcher._delete_account_files("2", "account2@example.com")
++        creds.assert_not_called()
++
++    def test_remove_checks_strictly_before_deleting(self, switcher):
++        chrome_dir_for(switcher.backup_dir, "2", "account2@example.com").mkdir(parents=True)
++        with patch.object(chrome, "running_pids", return_value=[]) as pids, \
++             patch("claude_swap.desktop.running_pids", return_value=[]), \
++             patch.object(switcher, "_ensure_no_live_session"), \
++             patch.object(switcher, "_delete_account_credentials"):
++            switcher._delete_account_files("2", "account2@example.com")
++        assert pids.call_args.kwargs["strict"] is True
++
++    def test_remove_keeps_the_account_when_the_profile_will_not_go(self, switcher):
++        profile = chrome_dir_for(switcher.backup_dir, "2", "account2@example.com")
++        profile.mkdir(parents=True)
++        with patch.object(chrome, "running_pids", return_value=[]), \
++             patch("claude_swap.desktop.running_pids", return_value=[]), \
++             patch.object(chrome.shutil, "rmtree", side_effect=OSError("busy")), \
++             patch.object(switcher, "_ensure_no_live_session"), \
++             patch.object(switcher, "_delete_account_credentials") as creds:
++            with pytest.raises(SessionError, match="Could not remove the Chrome .*busy"):
 +                switcher._delete_account_files("2", "account2@example.com")
 +        creds.assert_not_called()
 +

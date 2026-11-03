@@ -92,7 +92,7 @@ index 8222a5c13aded44b031ebf84e2a58cead3d3c5e3..10585759be6493d1cc1bdc7c8d31dea8
    %(prog)s switch <num|email>         switch to a specific account
    %(prog)s add                        add the current account
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index dfe425b1a3887c8c8ac1a3f823ffc209bb75049e..a381a8f25d6d864ba50484620a5ead07930a0998 100644
+index 2791433ca4a45a57bf384f4a700faf44a0d8fb12..cddcd39b4fd468c9d3e9adb90eee5c8beb1592f5 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
 @@ -81,6 +81,7 @@ from claude_swap.printer import (
@@ -103,17 +103,21 @@ index dfe425b1a3887c8c8ac1a3f823ffc209bb75049e..a381a8f25d6d864ba50484620a5ead07
  )
  from claude_swap.paths import (
      get_backup_root,
-@@ -263,6 +264,56 @@ def _usage_entry_lines(entry: UsageEntry) -> list[str]:
+@@ -263,6 +264,69 @@ def _usage_entry_lines(entry: UsageEntry) -> list[str]:
      return [dimmed(detail)]
  
  
-+def _deadline_note(ts: float) -> str:
-+    """"02:07 (in 52m)" for an absolute epoch deadline, in local time."""
++def _deadline_note(ts: float) -> str | None:
++    """"02:07 (in 52m)" for an absolute epoch deadline, in local time; None
++    for one no clock can show (an absurd ``Retry-After`` overflows it)."""
 +    from datetime import datetime, timezone
 +
-+    countdown, clock = oauth.format_reset(
-+        datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-+    )
++    try:
++        when = datetime.fromtimestamp(ts, tz=timezone.utc)
++        # Local time can overflow too: a UTC year-9999 deadline, east of UTC.
++        countdown, clock = oauth.format_reset(when.isoformat())
++    except (OverflowError, OSError, ValueError):
++        return None
 +    return f"{clock} (in {countdown})"
 +
 +
@@ -138,13 +142,20 @@ index dfe425b1a3887c8c8ac1a3f823ffc209bb75049e..a381a8f25d6d864ba50484620a5ead07
 +        sentinel = entry.sentinel or record.sentinel or ""
 +        headline = SENTINEL_NOTES.get(sentinel, sentinel)
 +    elif record.error == "http-429":
-+        if record.retry_after_s is not None:
-+            deadline = _deadline_note(time.time() + record.retry_after_s)
-+            headline = f"rate limited (HTTP 429) — the server allows a retry after {deadline}"
-+        elif entry.backoff_until is not None:
++        server = (
++            _deadline_note(time.time() + record.retry_after_s)
++            if record.retry_after_s is not None else None
++        )
++        local = (
++            _deadline_note(entry.backoff_until)
++            if entry.backoff_until is not None else None
++        )
++        if server is not None:
++            headline = f"rate limited (HTTP 429) — the server allows a retry after {server}"
++        elif local is not None:
 +            headline = (
-+                "rate limited (HTTP 429) — no Retry-After from the server; "
-+                f"backing off until {_deadline_note(entry.backoff_until)}"
++                "rate limited (HTTP 429) — no usable Retry-After from the server; "
++                f"backing off until {local}"
 +            )
 +        else:
 +            headline = "rate limited (HTTP 429)"
@@ -152,7 +163,9 @@ index dfe425b1a3887c8c8ac1a3f823ffc209bb75049e..a381a8f25d6d864ba50484620a5ead07
 +        headline = f"refresh failed ({ERROR_NOTES.get(record.error, record.error)})"
 +    out = [yellowed(headline)]
 +    last_seen = last_seen_note(entry)
-+    if last_seen is not None:
++    # Same guard as _usage_entry_lines: an API-key account has no quota, so
++    # a usage row it once carried is never shown.
++    if last_seen is not None and entry.sentinel != USAGE_API_KEY:
 +        out.append(f"{dimmed('└')} {muted(last_seen)}")
 +    return out, False
 +
@@ -160,7 +173,7 @@ index dfe425b1a3887c8c8ac1a3f823ffc209bb75049e..a381a8f25d6d864ba50484620a5ead07
  def _label_token_status(source: str, credentials: str) -> str | None:
      """Return ``oauth.build_token_status`` relabelled by credential source."""
      status = oauth.build_token_status(credentials)
-@@ -5476,9 +5527,17 @@ class ClaudeAccountSwitcher:
+@@ -5498,9 +5562,17 @@ class ClaudeAccountSwitcher:
          fetch: set[str] | None = None,
          *,
          scheduled: bool = False,
@@ -178,7 +191,7 @@ index dfe425b1a3887c8c8ac1a3f823ffc209bb75049e..a381a8f25d6d864ba50484620a5ead07
          ``fetch=None`` (on-demand callers: ``--list``/``--status``/switch
          strategies, dashboards) makes every account a candidate but respects
          the persisted poll plans; the auto engine passes an explicit set whose
-@@ -5552,6 +5611,7 @@ class ClaudeAccountSwitcher:
+@@ -5574,6 +5646,7 @@ class ClaudeAccountSwitcher:
                  identities,
                  respect_plans=False,
                  repair_overslept=scheduled,
@@ -186,7 +199,7 @@ index dfe425b1a3887c8c8ac1a3f823ffc209bb75049e..a381a8f25d6d864ba50484620a5ead07
              )
          # An expired ACTIVE credential that cannot reach the fetch path (and
          # its locked refresh) this tick — failure backoff, a concurrent
-@@ -5588,6 +5648,8 @@ class ClaudeAccountSwitcher:
+@@ -5610,6 +5683,8 @@ class ClaudeAccountSwitcher:
              accepted_records = {
                  num: record for num, record in records.items() if num in accepted
              }
@@ -195,7 +208,7 @@ index dfe425b1a3887c8c8ac1a3f823ffc209bb75049e..a381a8f25d6d864ba50484620a5ead07
              for num, record in accepted_records.items():
                  if record.sentinel is not None:
                      sentinels[num] = record.sentinel
-@@ -6152,6 +6214,59 @@ class ClaudeAccountSwitcher:
+@@ -6174,6 +6249,63 @@ class ClaudeAccountSwitcher:
          except Exception:
              self._logger.debug("Failed to detect running instances", exc_info=True)
  
@@ -219,6 +232,10 @@ index dfe425b1a3887c8c8ac1a3f823ffc209bb75049e..a381a8f25d6d864ba50484620a5ead07
 +            return 1
 +        accounts_info = self._build_accounts_info()
 +        by_num = {str(info[0]): info for info in accounts_info}
++        if not by_num:
++            # sequence.json outlives the last removed account.
++            print(dimmed("No accounts are managed yet."))
++            return 1
 +        if identifiers:
 +            selected: list[str] = []
 +            for ident in identifiers:
@@ -328,10 +345,10 @@ index 6164fe7dbcf39758bd24c7823381e43dcde2261f..70b38e2e22610cd3b233512cef587bad
      next_poll_at = _num_or_none(row.get("nextPollAt"))
 diff --git a/tests/test_refresh_command.py b/tests/test_refresh_command.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..518e55182c63c0ec6a354f14271a8e3e6a4febd1
+index 0000000000000000000000000000000000000000..23d41702e74d2518c7957f0399b52907684b7b88
 --- /dev/null
 +++ b/tests/test_refresh_command.py
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,191 @@
 +"""``cswap refresh``: fetch usage on demand, one account at a time.
 +
 +``list`` serves a cached measurement while an account is fresh, not poll-due,
@@ -345,13 +362,18 @@ index 0000000000000000000000000000000000000000..518e55182c63c0ec6a354f14271a8e3e
 +import re
 +import sys
 +import time
++from types import SimpleNamespace
 +from unittest.mock import patch
 +
 +import pytest
 +
 +from claude_swap import cli
-+from claude_swap.json_output import USAGE_RELOGIN_REQUIRED
-+from claude_swap.switcher import ClaudeAccountSwitcher
++from claude_swap.json_output import USAGE_API_KEY, USAGE_RELOGIN_REQUIRED
++from claude_swap.switcher import (
++    ClaudeAccountSwitcher,
++    _deadline_note,
++    _refresh_outcome_lines,
++)
 +from claude_swap.usage_store import FetchRecord
 +
 +USAGE_1 = {"five_hour": {"pct": 40.0}, "seven_day": {"pct": 10.0}}
@@ -434,7 +456,36 @@ index 0000000000000000000000000000000000000000..518e55182c63c0ec6a354f14271a8e3e
 +            "1": FetchRecord(error="http-429"),
 +            "2": FetchRecord(usage=USAGE_2),
 +        }, capsys=capsys)
-+        assert "no Retry-After from the server; backing off until" in out
++        assert "no usable Retry-After from the server; backing off until" in out
++
++    def test_oversized_retry_after_falls_back_to_the_local_backoff(self, switcher, capsys):
++        """A Retry-After no clock can show must not abort the command."""
++        code, out, _ = _run(switcher, {
++            "1": FetchRecord(error="http-429", retry_after_s=1e20),
++            "2": FetchRecord(usage=USAGE_2),
++        }, capsys=capsys)
++        assert code == 1
++        one, two = out.split("  2: ")
++        assert "rate limited (HTTP 429)" in one
++        assert "the server allows a retry after" not in one
++        assert "90%" in two
++
++    def test_deadline_overflowing_local_time_is_unshowable(self):
++        """A year-9999 UTC deadline is valid until it moves east of UTC."""
++        with patch("claude_swap.oauth.format_reset", side_effect=OverflowError):
++            assert _deadline_note(time.time() + 60) is None
++
++    def test_api_key_account_never_shows_a_last_seen_row(self):
++        entry = SimpleNamespace(sentinel=USAGE_API_KEY, backoff_until=None)
++        with patch("claude_swap.switcher.last_seen_note", return_value="last seen 40% used"):
++            lines, ok = _refresh_outcome_lines(entry, None)
++        assert not ok
++        assert not any("last seen" in line for line in lines)
++
++    def test_empty_roster_is_a_failure(self, switcher, capsys):
++        with patch.object(switcher, "_build_accounts_info", return_value=[]):
++            assert switcher.refresh_usage() == 1
++        assert "No accounts are managed yet." in capsys.readouterr().out
 +
 +    def test_failure_keeps_serving_the_last_measurement(self, switcher, capsys):
 +        _run(switcher, {"1": FetchRecord(usage=USAGE_1),

@@ -24,7 +24,7 @@ directory when it exists, since it lives inside the backup dir that purge
 removes.
 
 diff --git a/src/claude_swap/session.py b/src/claude_swap/session.py
-index e98988bec860dda7a761cdf18cde4971e2e4cb1f..0df33ab6031248837250f4a16b175e296a6ce505 100644
+index e98988bec860dda7a761cdf18cde4971e2e4cb1f..82a1f484c6562b8fd02209ae319c0139ce479a2b 100644
 --- a/src/claude_swap/session.py
 +++ b/src/claude_swap/session.py
 @@ -36,6 +36,7 @@ session-aware guards); it receives a ``ClaudeAccountSwitcher`` instance.
@@ -35,7 +35,15 @@ index e98988bec860dda7a761cdf18cde4971e2e4cb1f..0df33ab6031248837250f4a16b175e29
  import hashlib
  import json
  import os
-@@ -93,6 +94,13 @@ HISTORY_ITEMS = (
+@@ -44,6 +45,7 @@ import subprocess
+ import sys
+ import time
+ import unicodedata
++import uuid
+ from pathlib import Path
+ from typing import TYPE_CHECKING, NoReturn
+ 
+@@ -93,6 +95,20 @@ HISTORY_ITEMS = (
  # re-syncs only ever remove cswap-managed links/copies, never user data).
  SHARE_MANIFEST = ".cswap-shared.json"
  
@@ -46,10 +54,17 @@ index e98988bec860dda7a761cdf18cde4971e2e4cb1f..0df33ab6031248837250f4a16b175e29
 +# project — so the losing copy is set aside, never deleted.
 +HISTORY_CONFLICTS_DIRNAME = "history-conflicts"
 +
++
++def conflict_run_name() -> str:
++    """A fresh ``<run>`` directory name: the time, for reading, plus a random
++    suffix, so two set-asides in the same second never share a directory
++    and the second one never overwrites a file the first one parked."""
++    return f"{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
++
  # Deferred-invalidation marker: backup credentials changed while a session was
  # live (we never pull credentials out from under a running claude), so the
  # profile must be re-bootstrapped on the next non-live `cswap run` even if it
-@@ -1402,8 +1410,14 @@ class SessionManager:
+@@ -1402,8 +1418,14 @@ class SessionManager:
                      )
                  )
                  return False
@@ -57,7 +72,7 @@ index e98988bec860dda7a761cdf18cde4971e2e4cb1f..0df33ab6031248837250f4a16b175e29
 +                self.switcher.backup_dir
 +                / HISTORY_CONFLICTS_DIRNAME
 +                / session_dir.name
-+                / time.strftime("%Y%m%dT%H%M%S")
++                / conflict_run_name()
 +            )
              try:
 -                self._merge_history_into_source(src, dest)
@@ -65,7 +80,7 @@ index e98988bec860dda7a761cdf18cde4971e2e4cb1f..0df33ab6031248837250f4a16b175e29
              except (OSError, ValueError) as e:
                  # ValueError covers UnicodeDecodeError: a byte-corrupt
                  # history file is "nothing readable to merge", and losing a
-@@ -1425,6 +1439,16 @@ class SessionManager:
+@@ -1425,6 +1447,16 @@ class SessionManager:
                      f"{src} — conversation history is now shared."
                  )
              )
@@ -82,7 +97,7 @@ index e98988bec860dda7a761cdf18cde4971e2e4cb1f..0df33ab6031248837250f4a16b175e29
          if not src.exists():
              # Fresh ~/.claude (or first run): seed an empty share target so
              # the generic loop below has something to link.
-@@ -1443,16 +1467,23 @@ class SessionManager:
+@@ -1443,16 +1475,23 @@ class SessionManager:
          return True
  
      @staticmethod
@@ -112,7 +127,7 @@ index e98988bec860dda7a761cdf18cde4971e2e4cb1f..0df33ab6031248837250f4a16b175e29
          if dest.is_dir():
              _mkdir_private(src)
              for path in sorted(dest.rglob("*"), reverse=True):
-@@ -1462,8 +1493,11 @@ class SessionManager:
+@@ -1462,8 +1501,11 @@ class SessionManager:
                      path.rmdir()  # children already moved (reverse walk)
                      continue
                  if target.exists():
@@ -126,7 +141,7 @@ index e98988bec860dda7a761cdf18cde4971e2e4cb1f..0df33ab6031248837250f4a16b175e29
                  _mkdir_private(target.parent)
                  shutil.move(str(path), str(target))
              dest.rmdir()
-@@ -1490,6 +1524,7 @@ class SessionManager:
+@@ -1490,6 +1532,7 @@ class SessionManager:
                  with src.open("a", encoding="utf-8") as f:
                      f.write(terminator + "\n".join(lines) + "\n")
              dest.unlink()
@@ -135,10 +150,10 @@ index e98988bec860dda7a761cdf18cde4971e2e4cb1f..0df33ab6031248837250f4a16b175e29
      @staticmethod
      def _read_manifest(manifest_path: Path) -> list[str]:
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index a381a8f25d6d864ba50484620a5ead07930a0998..ca97a043f000b744b50b218cefd7b4cb5d69fe57 100644
+index cddcd39b4fd468c9d3e9adb90eee5c8beb1592f5..7397d4dba2d86834c59b72d6bf2b093dcf6e0fe9 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
-@@ -7981,7 +7981,7 @@ class ClaudeAccountSwitcher:
+@@ -8020,7 +8020,7 @@ class ClaudeAccountSwitcher:
              if sessions_root.is_dir()
              else []
          )
@@ -147,23 +162,31 @@ index a381a8f25d6d864ba50484620a5ead07930a0998..ca97a043f000b744b50b218cefd7b4cb
  
          live = {}
          unreadable = {}
-@@ -8013,6 +8013,11 @@ class ClaudeAccountSwitcher:
+@@ -8052,6 +8052,11 @@ class ClaudeAccountSwitcher:
  
          warning("This will remove ALL claude-swap data from your system:")
          print(f"  - Backup directory: {self.backup_dir}")
 +        if (self.backup_dir / HISTORY_CONFLICTS_DIRNAME).is_dir():
 +            print(
-+                f"    (including {HISTORY_CONFLICTS_DIRNAME}/: transcripts "
-+                "set aside by history sharing)"
++                f"    (including {HISTORY_CONFLICTS_DIRNAME}/: files "
++                "set aside when sharing met a differing copy)"
 +            )
          if legacy_distinct and legacy.exists():
              print(f"  - Legacy backup directory: {legacy}")
          if self.platform == Platform.MACOS:
 diff --git a/tests/test_session.py b/tests/test_session.py
-index eb826e402a40b958800efe0614edba1cc642de1f..5074d56822038ec44eb607451dc53104b9b9153c 100644
+index eb826e402a40b958800efe0614edba1cc642de1f..b6224ac72a611ae773d1de6da0e5a7a1243eda2c 100644
 --- a/tests/test_session.py
 +++ b/tests/test_session.py
-@@ -27,6 +27,7 @@ from claude_swap.exceptions import (
+@@ -10,6 +10,7 @@ import sys
+ import unicodedata
+ from pathlib import Path
+ from types import SimpleNamespace
++from unittest.mock import patch
+ 
+ import pytest
+ 
+@@ -27,11 +28,13 @@ from claude_swap.exceptions import (
  from claude_swap.models import Platform
  from claude_swap.paths import get_global_config_path
  from claude_swap.session import (
@@ -171,7 +194,13 @@ index eb826e402a40b958800efe0614edba1cc642de1f..5074d56822038ec44eb607451dc53104
      MCP_DISPLACED_STASH,
      MCP_MIRROR_MARKER,
      SHARE_MANIFEST,
-@@ -1940,11 +1941,11 @@ class TestShareHistoryPosix:
+     SessionManager,
+     _probe_env,
++    conflict_run_name,
+     keychain_service_name,
+     profile_is_quiescent,
+     read_session_identity,
+@@ -1940,11 +1943,11 @@ class TestShareHistoryPosix:
          # And the profile now links to the shared copy.
          assert (session_dir / "projects").readlink() == merged
  
@@ -185,7 +214,7 @@ index eb826e402a40b958800efe0614edba1cc642de1f..5074d56822038ec44eb607451dc53104
  
          mgr._sync_sharing(session_dir, share=True, share_history=True)
  
-@@ -1952,6 +1953,52 @@ class TestShareHistoryPosix:
+@@ -1952,6 +1955,58 @@ class TestShareHistoryPosix:
              source / "projects" / "-home-user-app" / "aaa.jsonl"
          ).read_text() == "main-a\n"
          assert (session_dir / "projects").is_symlink()
@@ -222,6 +251,12 @@ index eb826e402a40b958800efe0614edba1cc642de1f..5074d56822038ec44eb607451dc53104
 +        out = capsys.readouterr().out
 +        assert "2 file(s)" in out
 +        assert str(runs[0]) in out
++
++    def test_set_aside_runs_in_the_same_second_get_their_own_directory(self):
++        with patch("claude_swap.session.time.strftime", return_value="20260101T000000"):
++            first, second = conflict_run_name(), conflict_run_name()
++        assert first != second
++        assert first.startswith("20260101T000000-")
 +
 +    def test_merge_without_collisions_reports_nothing_set_aside(
 +        self, history_setup, capsys
