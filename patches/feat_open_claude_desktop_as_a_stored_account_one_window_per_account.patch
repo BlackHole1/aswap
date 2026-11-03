@@ -931,10 +931,10 @@ index d40c816f238e377b871d82bcb0cdaa15b1ae8727..003767966e1e31e2712bfbef7144cdf4
      rows = []
      for spec in SETTING_SPECS.values():
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index ca97a043f000b744b50b218cefd7b4cb5d69fe57..87c0d1d3846fef5da666b8a7832606b0961be3f8 100644
+index 02b850c1fac254d5d7137921c0097ac92355e756..313d731d1cd7c7741d54f43a298c177d342f75d9 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
-@@ -957,11 +957,20 @@ class ClaudeAccountSwitcher:
+@@ -972,11 +972,20 @@ class ClaudeAccountSwitcher:
              SessionError: a live session-mode instance is using this account.
          """
          self._ensure_no_live_session(account_num, email, "the operation")
@@ -955,7 +955,7 @@ index ca97a043f000b744b50b218cefd7b4cb5d69fe57..87c0d1d3846fef5da666b8a7832606b0
  
      def _prune_mappings(self, email: str, org_uuid: str) -> None:
          """Drop directory mappings for an identity that no longer has a slot.
-@@ -8010,6 +8019,24 @@ class ClaudeAccountSwitcher:
+@@ -8048,6 +8057,24 @@ class ClaudeAccountSwitcher:
                  "would pull a live profile out from under it. Repair or remove "
                  "them, then retry --purge."
              )
@@ -980,7 +980,7 @@ index ca97a043f000b744b50b218cefd7b4cb5d69fe57..87c0d1d3846fef5da666b8a7832606b0
  
          warning("This will remove ALL claude-swap data from your system:")
          print(f"  - Backup directory: {self.backup_dir}")
-@@ -8026,6 +8053,8 @@ class ClaudeAccountSwitcher:
+@@ -8064,6 +8091,8 @@ class ClaudeAccountSwitcher:
              print("  - All stored account credential files")
          if session_dirs:
              print("  - All session profiles and their Keychain entries")
@@ -989,7 +989,7 @@ index ca97a043f000b744b50b218cefd7b4cb5d69fe57..87c0d1d3846fef5da666b8a7832606b0
          print()
          print(dimmed("Note: This does NOT affect your current Claude Code login."))
          print()
-@@ -8085,6 +8114,10 @@ class ClaudeAccountSwitcher:
+@@ -8123,6 +8152,10 @@ class ClaudeAccountSwitcher:
              removed_items.append(
                  f"Session profiles: {', '.join(d.name for d in session_dirs)}"
              )
