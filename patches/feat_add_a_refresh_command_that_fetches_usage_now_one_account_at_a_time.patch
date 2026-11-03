@@ -92,7 +92,7 @@ index 8222a5c13aded44b031ebf84e2a58cead3d3c5e3..10585759be6493d1cc1bdc7c8d31dea8
    %(prog)s switch <num|email>         switch to a specific account
    %(prog)s add                        add the current account
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index ed0d2f60a7eb2cf86a0812f9286fce400c3fb091..e362845aa3342117a828c5f262b5c2f6c09f33f8 100644
+index 2791433ca4a45a57bf384f4a700faf44a0d8fb12..cddcd39b4fd468c9d3e9adb90eee5c8beb1592f5 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
 @@ -81,6 +81,7 @@ from claude_swap.printer import (
@@ -103,7 +103,7 @@ index ed0d2f60a7eb2cf86a0812f9286fce400c3fb091..e362845aa3342117a828c5f262b5c2f6
  )
  from claude_swap.paths import (
      get_backup_root,
-@@ -263,6 +264,68 @@ def _usage_entry_lines(entry: UsageEntry) -> list[str]:
+@@ -263,6 +264,69 @@ def _usage_entry_lines(entry: UsageEntry) -> list[str]:
      return [dimmed(detail)]
  
  
@@ -114,9 +114,10 @@ index ed0d2f60a7eb2cf86a0812f9286fce400c3fb091..e362845aa3342117a828c5f262b5c2f6
 +
 +    try:
 +        when = datetime.fromtimestamp(ts, tz=timezone.utc)
++        # Local time can overflow too: a UTC year-9999 deadline, east of UTC.
++        countdown, clock = oauth.format_reset(when.isoformat())
 +    except (OverflowError, OSError, ValueError):
 +        return None
-+    countdown, clock = oauth.format_reset(when.isoformat())
 +    return f"{clock} (in {countdown})"
 +
 +
@@ -172,7 +173,7 @@ index ed0d2f60a7eb2cf86a0812f9286fce400c3fb091..e362845aa3342117a828c5f262b5c2f6
  def _label_token_status(source: str, credentials: str) -> str | None:
      """Return ``oauth.build_token_status`` relabelled by credential source."""
      status = oauth.build_token_status(credentials)
-@@ -5498,9 +5561,17 @@ class ClaudeAccountSwitcher:
+@@ -5498,9 +5562,17 @@ class ClaudeAccountSwitcher:
          fetch: set[str] | None = None,
          *,
          scheduled: bool = False,
@@ -190,7 +191,7 @@ index ed0d2f60a7eb2cf86a0812f9286fce400c3fb091..e362845aa3342117a828c5f262b5c2f6
          ``fetch=None`` (on-demand callers: ``--list``/``--status``/switch
          strategies, dashboards) makes every account a candidate but respects
          the persisted poll plans; the auto engine passes an explicit set whose
-@@ -5574,6 +5645,7 @@ class ClaudeAccountSwitcher:
+@@ -5574,6 +5646,7 @@ class ClaudeAccountSwitcher:
                  identities,
                  respect_plans=False,
                  repair_overslept=scheduled,
@@ -198,7 +199,7 @@ index ed0d2f60a7eb2cf86a0812f9286fce400c3fb091..e362845aa3342117a828c5f262b5c2f6
              )
          # An expired ACTIVE credential that cannot reach the fetch path (and
          # its locked refresh) this tick — failure backoff, a concurrent
-@@ -5610,6 +5682,8 @@ class ClaudeAccountSwitcher:
+@@ -5610,6 +5683,8 @@ class ClaudeAccountSwitcher:
              accepted_records = {
                  num: record for num, record in records.items() if num in accepted
              }
@@ -207,7 +208,7 @@ index ed0d2f60a7eb2cf86a0812f9286fce400c3fb091..e362845aa3342117a828c5f262b5c2f6
              for num, record in accepted_records.items():
                  if record.sentinel is not None:
                      sentinels[num] = record.sentinel
-@@ -6174,6 +6248,63 @@ class ClaudeAccountSwitcher:
+@@ -6174,6 +6249,63 @@ class ClaudeAccountSwitcher:
          except Exception:
              self._logger.debug("Failed to detect running instances", exc_info=True)
  
@@ -344,10 +345,10 @@ index 6164fe7dbcf39758bd24c7823381e43dcde2261f..70b38e2e22610cd3b233512cef587bad
      next_poll_at = _num_or_none(row.get("nextPollAt"))
 diff --git a/tests/test_refresh_command.py b/tests/test_refresh_command.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..d1ee464de82f80a40542754142a17723cbf38381
+index 0000000000000000000000000000000000000000..23d41702e74d2518c7957f0399b52907684b7b88
 --- /dev/null
 +++ b/tests/test_refresh_command.py
-@@ -0,0 +1,182 @@
+@@ -0,0 +1,191 @@
 +"""``cswap refresh``: fetch usage on demand, one account at a time.
 +
 +``list`` serves a cached measurement while an account is fresh, not poll-due,
@@ -368,7 +369,11 @@ index 0000000000000000000000000000000000000000..d1ee464de82f80a40542754142a17723
 +
 +from claude_swap import cli
 +from claude_swap.json_output import USAGE_API_KEY, USAGE_RELOGIN_REQUIRED
-+from claude_swap.switcher import ClaudeAccountSwitcher, _refresh_outcome_lines
++from claude_swap.switcher import (
++    ClaudeAccountSwitcher,
++    _deadline_note,
++    _refresh_outcome_lines,
++)
 +from claude_swap.usage_store import FetchRecord
 +
 +USAGE_1 = {"five_hour": {"pct": 40.0}, "seven_day": {"pct": 10.0}}
@@ -464,6 +469,11 @@ index 0000000000000000000000000000000000000000..d1ee464de82f80a40542754142a17723
 +        assert "rate limited (HTTP 429)" in one
 +        assert "the server allows a retry after" not in one
 +        assert "90%" in two
++
++    def test_deadline_overflowing_local_time_is_unshowable(self):
++        """A year-9999 UTC deadline is valid until it moves east of UTC."""
++        with patch("claude_swap.oauth.format_reset", side_effect=OverflowError):
++            assert _deadline_note(time.time() + 60) is None
 +
 +    def test_api_key_account_never_shows_a_last_seen_row(self):
 +        entry = SimpleNamespace(sentinel=USAGE_API_KEY, backoff_until=None)

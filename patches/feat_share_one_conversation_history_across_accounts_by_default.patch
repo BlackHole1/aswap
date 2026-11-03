@@ -93,7 +93,7 @@ index 10585759be6493d1cc1bdc7c8d31dea89cc25f83..9777aca429c403eb1e81bfbf2d9ce7e4
      return enabled
  
 diff --git a/src/claude_swap/session.py b/src/claude_swap/session.py
-index 0df33ab6031248837250f4a16b175e296a6ce505..f9286faab033b9a2672b44327360129e8b3f7875 100644
+index 82a1f484c6562b8fd02209ae319c0139ce479a2b..0f66664cc3f7590ed46a009afa314d4bc45f1f5d 100644
 --- a/src/claude_swap/session.py
 +++ b/src/claude_swap/session.py
 @@ -22,13 +22,18 @@ detects symlinks and writes through to the target, so in-session ``/config``
@@ -119,7 +119,7 @@ index 0df33ab6031248837250f4a16b175e296a6ce505..f9286faab033b9a2672b44327360129e
  
  This module must not import ``switcher`` (switcher imports us for the
  session-aware guards); it receives a ``ClaudeAccountSwitcher`` instance.
-@@ -69,8 +74,8 @@ if TYPE_CHECKING:
+@@ -70,8 +75,8 @@ if TYPE_CHECKING:
  # Items mirrored from ~/.claude into session profiles when sharing is on.
  # Deliberately excludes anything account- or instance-scoped: plugins/,
  # sessions/, ide/, .claude.json, .credentials.json, statsig/ and other
@@ -130,7 +130,7 @@ index 0df33ab6031248837250f4a16b175e296a6ce505..f9286faab033b9a2672b44327360129e
  # .claude.json stays excluded as a file, but its one user-scoped key —
  # top-level mcpServers — is mirrored separately by _sync_mcp_servers.
  SHARED_ITEMS = (
-@@ -630,6 +635,16 @@ class SessionManager:
+@@ -638,6 +643,16 @@ class SessionManager:
                          "default login — launching claude directly."
                      )
                  )
@@ -336,10 +336,10 @@ index be5ddc02a520474d3dcf1e952cd398855f5d5ae3..460e711d72e512963d1603c565c75281
          assert by_key["autoswitch.threshold"]["isSet"] is False
          # An unset weekly line reports null, not the threshold it falls back
 diff --git a/tests/test_session.py b/tests/test_session.py
-index 5074d56822038ec44eb607451dc53104b9b9153c..863c8adf83407f89ca22644a1a5d8894e7a3d509 100644
+index b6224ac72a611ae773d1de6da0e5a7a1243eda2c..6eaf1c565a89594ab537f4badf3021d673684a4b 100644
 --- a/tests/test_session.py
 +++ b/tests/test_session.py
-@@ -2128,6 +2128,73 @@ class TestShareHistoryPosix:
+@@ -2136,6 +2136,73 @@ class TestShareHistoryPosix:
          assert (proj / "bbb.jsonl").read_text() == "profile-b\n"
  
  

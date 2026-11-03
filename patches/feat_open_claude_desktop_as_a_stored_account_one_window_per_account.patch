@@ -167,10 +167,10 @@ index 9777aca429c403eb1e81bfbf2d9ce7e44a74ce1c..14e985d4be4c4cd72ecaa04b70c46ca1
  
 diff --git a/src/claude_swap/desktop.py b/src/claude_swap/desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..fb3720f888125cfd35e96c96d1f7052b9f8c9a1d
+index 0000000000000000000000000000000000000000..bdb20572af92dbea475629c8f681aba9bcb0fb36
 --- /dev/null
 +++ b/src/claude_swap/desktop.py
-@@ -0,0 +1,660 @@
+@@ -0,0 +1,683 @@
 +"""Claude Desktop, one window per stored account.
 +
 +Claude Desktop holds one login per profile: to use a second account the
@@ -213,7 +213,7 @@ index 0000000000000000000000000000000000000000..fb3720f888125cfd35e96c96d1f7052b
 +from claude_swap.exceptions import AccountNotFoundError, ConfigError, SessionError
 +from claude_swap.models import Platform
 +from claude_swap.printer import accent, bold_accent, dimmed, error, muted, warning
-+from claude_swap.session import slugify_email
++from claude_swap.session import conflict_run_name, slugify_email
 +
 +if TYPE_CHECKING:
 +    from claude_swap.switcher import ClaudeAccountSwitcher
@@ -399,7 +399,9 @@ index 0000000000000000000000000000000000000000..fb3720f888125cfd35e96c96d1f7052b
 +        pass
 +
 +
-+def running_pids(data_dir: Path, platform: Platform | None = None) -> list[int]:
++def running_pids(
++    data_dir: Path, platform: Platform | None = None, *, strict: bool = False
++) -> list[int]:
 +    """PIDs of the Claude processes bound to exactly ``data_dir``.
 +
 +    Matches the whole ``--user-data-dir=<dir>`` token, terminated by
@@ -408,22 +410,35 @@ index 0000000000000000000000000000000000000000..fb3720f888125cfd35e96c96d1f7052b
 +    The pattern is POSIX ERE for ``pgrep``: ``[[:space:]]``, not ``\\s``,
 +    which BSD ``pgrep`` (macOS) does not understand and never matches.
 +    Empty on every failure: not knowing reads as "not running", which only
-+    ever costs a second window, never a lost one.
++    ever costs a second window, never a lost one. A caller about to delete
++    the profile passes ``strict``: there not knowing must not read as
++    closed, so a failed check raises ``SessionError`` instead.
 +    """
 +    platform = platform or Platform.detect()
 +    needle = _user_data_arg(data_dir)
 +    me = os.getpid()
 +    try:
 +        if platform == Platform.WINDOWS:
-+            out = _windows_matching_pids(needle)
++            proc = _windows_matching_pids(needle)
++            failed = proc.returncode != 0
 +        else:
 +            pattern = re.escape(needle) + r"([[:space:]]|$)"
 +            proc = subprocess.run(
 +                ["pgrep", "-f", pattern],
 +                capture_output=True, text=True, timeout=10,
 +            )
-+            out = proc.stdout
-+    except (OSError, subprocess.TimeoutExpired):
++            # pgrep: 0 matched, 1 matched nothing, anything else failed.
++            failed = proc.returncode not in (0, 1)
++        if failed and strict:
++            detail = (proc.stderr or "").strip() or f"exit status {proc.returncode}"
++            raise OSError(detail)
++        out = proc.stdout
++    except (OSError, subprocess.TimeoutExpired) as exc:
++        if strict:
++            raise SessionError(
++                f"Could not tell whether anything still runs on {data_dir} "
++                f"({exc}); refusing to remove it."
++            ) from exc
 +        return []
 +    pids = []
 +    for token in out.split():
@@ -436,9 +451,9 @@ index 0000000000000000000000000000000000000000..fb3720f888125cfd35e96c96d1f7052b
 +    return pids
 +
 +
-+def _windows_matching_pids(needle: str) -> str:
-+    """PIDs whose command line carries ``needle`` as a whole token, one per
-+    line, via CIM.
++def _windows_matching_pids(needle: str) -> subprocess.CompletedProcess:
++    """The CIM query listing, one per line on stdout, the PIDs whose
++    command line carries ``needle`` as a whole token.
 +
 +    The token ends at whitespace, a closing quote (Windows quotes an
 +    argument that holds a space) or the end of the line, the same rule as
@@ -455,11 +470,10 @@ index 0000000000000000000000000000000000000000..fb3720f888125cfd35e96c96d1f7052b
 +        "-and $_.CommandLine -ne $null -and $_.CommandLine -cmatch $p } "
 +        "| ForEach-Object { $_.ProcessId }"
 +    )
-+    proc = subprocess.run(
++    return subprocess.run(
 +        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
 +        capture_output=True, text=True, timeout=20,
 +    )
-+    return proc.stdout
 +
 +
 +def quit_instance(
@@ -754,7 +768,7 @@ index 0000000000000000000000000000000000000000..fb3720f888125cfd35e96c96d1f7052b
 +            elif dest.is_dir():
 +                conflicts = (
 +                    self.switcher.backup_dir / "history-conflicts"
-+                    / f"desktop-{data_dir.name}" / time.strftime("%Y%m%dT%H%M%S")
++                    / f"desktop-{data_dir.name}" / conflict_run_name()
 +                )
 +                try:
 +                    set_aside = self._merge_into(src, dest, conflicts)
@@ -794,8 +808,11 @@ index 0000000000000000000000000000000000000000..fb3720f888125cfd35e96c96d1f7052b
 +    # -- lifecycle hooks used by the switcher ------------------------------
 +
 +    def ensure_closed(self, account_num: str, email: str, action: str) -> None:
-+        """Refuse ``action`` while the account's window is open."""
-+        pids = running_pids(self.data_dir(account_num, email), self.platform)
++        """Refuse ``action`` while the account's window is open, or while
++        a failed process check leaves that unknown."""
++        pids = running_pids(
++            self.data_dir(account_num, email), self.platform, strict=True
++        )
 +        if pids:
 +            raise SessionError(
 +                f"Claude Desktop is open for account {account_num} ({email}), "
@@ -807,12 +824,18 @@ index 0000000000000000000000000000000000000000..fb3720f888125cfd35e96c96d1f7052b
 +        """Remove the account's profile directory; the login goes with it."""
 +        data_dir = self.data_dir(account_num, email)
 +        if data_dir.exists():
-+            shutil.rmtree(data_dir, ignore_errors=True)
++            try:
++                shutil.rmtree(data_dir)
++            except OSError as exc:
++                raise SessionError(
++                    f"Could not remove the Claude Desktop profile {data_dir}: {exc}"
++                ) from exc
 +
-+    def open_profile_dirs(self) -> dict[str, list[int]]:
++    def open_profile_dirs(self, *, strict: bool = False) -> dict[str, list[int]]:
 +        """``{dir name: pids}`` for every profile with a window open, by
 +        scanning ``desktop/`` itself so a profile whose account is gone
-+        still counts."""
++        still counts. ``strict`` raises on a failed check, as in
++        ``running_pids``."""
 +        root = self.switcher.backup_dir / DESKTOP_DIRNAME
 +        if not root.is_dir():
 +            return {}
@@ -820,7 +843,7 @@ index 0000000000000000000000000000000000000000..fb3720f888125cfd35e96c96d1f7052b
 +        for d in sorted(root.iterdir()):
 +            if not d.is_dir():
 +                continue
-+            pids = running_pids(d, self.platform)
++            pids = running_pids(d, self.platform, strict=strict)
 +            if pids:
 +                live[d.name] = pids
 +        return live
@@ -931,36 +954,39 @@ index d40c816f238e377b871d82bcb0cdaa15b1ae8727..003767966e1e31e2712bfbef7144cdf4
      rows = []
      for spec in SETTING_SPECS.values():
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index 02b850c1fac254d5d7137921c0097ac92355e756..313d731d1cd7c7741d54f43a298c177d342f75d9 100644
+index 7397d4dba2d86834c59b72d6bf2b093dcf6e0fe9..c49518231c374578b54fadd99c8c20ac7791de2d 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
-@@ -972,11 +972,20 @@ class ClaudeAccountSwitcher:
+@@ -973,12 +973,23 @@ class ClaudeAccountSwitcher:
              SessionError: a live session-mode instance is using this account.
          """
          self._ensure_no_live_session(account_num, email, "the operation")
 +        desktop = self._desktop_manager()
 +        desktop.ensure_closed(account_num, email, "the operation")
++        # The app profile goes first: it holds a login of its own, so one
++        # that fails to delete must leave the account in place to retry.
++        desktop.delete_profile(account_num, email)
          self._delete_account_credentials(account_num, email)
          config_file = self.configs_dir / f".claude-config-{account_num}-{email}.json"
          if config_file.exists():
              config_file.unlink()
          self._delete_session_profile(account_num, email)
-+        desktop.delete_profile(account_num, email)
-+
+ 
 +    def _desktop_manager(self):
 +        """The account's Claude Desktop windows and profiles (see desktop.py)."""
 +        from claude_swap.desktop import DesktopManager
 +
 +        return DesktopManager(self)
- 
++
      def _prune_mappings(self, email: str, org_uuid: str) -> None:
          """Drop directory mappings for an identity that no longer has a slot.
-@@ -8048,6 +8057,24 @@ class ClaudeAccountSwitcher:
+ 
+@@ -8049,6 +8060,24 @@ class ClaudeAccountSwitcher:
                  "would pull a live profile out from under it. Repair or remove "
                  "them, then retry --purge."
              )
 +        # Same for Claude Desktop windows: their profile is the login.
-+        desktop_live = self._desktop_manager().open_profile_dirs()
++        desktop_live = self._desktop_manager().open_profile_dirs(strict=True)
 +        if desktop_live:
 +            details = "; ".join(
 +                f"{name} (PID {', '.join(map(str, pids))})"
@@ -980,7 +1006,7 @@ index 02b850c1fac254d5d7137921c0097ac92355e756..313d731d1cd7c7741d54f43a298c177d
  
          warning("This will remove ALL claude-swap data from your system:")
          print(f"  - Backup directory: {self.backup_dir}")
-@@ -8064,6 +8091,8 @@ class ClaudeAccountSwitcher:
+@@ -8065,6 +8094,8 @@ class ClaudeAccountSwitcher:
              print("  - All stored account credential files")
          if session_dirs:
              print("  - All session profiles and their Keychain entries")
@@ -989,7 +1015,7 @@ index 02b850c1fac254d5d7137921c0097ac92355e756..313d731d1cd7c7741d54f43a298c177d
          print()
          print(dimmed("Note: This does NOT affect your current Claude Code login."))
          print()
-@@ -8123,6 +8152,10 @@ class ClaudeAccountSwitcher:
+@@ -8124,6 +8155,10 @@ class ClaudeAccountSwitcher:
              removed_items.append(
                  f"Session profiles: {', '.join(d.name for d in session_dirs)}"
              )
@@ -1028,10 +1054,10 @@ index 460e711d72e512963d1603c565c75281c97773df..c82e9ea4ff191b360bed82614740a2b6
          assert by_key["autoswitch.threshold"]["isSet"] is False
 diff --git a/tests/test_desktop.py b/tests/test_desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..e95aaf4bed79af3c2b9362841d78d78f7898d440
+index 0000000000000000000000000000000000000000..10f4268b2dcd19f1a209a8a1e54a600bc1e822f9
 --- /dev/null
 +++ b/tests/test_desktop.py
-@@ -0,0 +1,697 @@
+@@ -0,0 +1,741 @@
 +"""``cswap desktop``: Claude Desktop, one window per stored account.
 +
 +Claude Desktop keeps one login per profile, and Electron honors
@@ -1220,6 +1246,21 @@ index 0000000000000000000000000000000000000000..e95aaf4bed79af3c2b9362841d78d78f
 +        with patch.object(desktop.subprocess, "run", side_effect=OSError("no pgrep")):
 +            assert desktop.running_pids(tmp_path, Platform.LINUX) == []
 +
++    def test_strict_refuses_to_read_a_failed_check_as_closed(self, tmp_path):
++        with patch.object(desktop.subprocess, "run", side_effect=OSError("no pgrep")):
++            with pytest.raises(SessionError, match="Could not tell"):
++                desktop.running_pids(tmp_path, Platform.LINUX, strict=True)
++        with patch.object(desktop.subprocess, "run") as run:
++            run.return_value = MagicMock(stdout="", stderr="bad regex", returncode=2)
++            with pytest.raises(SessionError, match="bad regex"):
++                desktop.running_pids(tmp_path, Platform.LINUX, strict=True)
++            assert desktop.running_pids(tmp_path, Platform.LINUX) == []
++
++    def test_strict_accepts_pgrep_matching_nothing(self, tmp_path):
++        with patch.object(desktop.subprocess, "run") as run:
++            run.return_value = MagicMock(stdout="", stderr="", returncode=1)
++            assert desktop.running_pids(tmp_path, Platform.LINUX, strict=True) == []
++
 +    def test_windows_asks_cim_for_the_command_line(self, tmp_path):
 +        with patch.object(desktop.subprocess, "run") as run:
 +            run.return_value = MagicMock(stdout="4242\r\n")
@@ -1395,7 +1436,7 @@ index 0000000000000000000000000000000000000000..e95aaf4bed79af3c2b9362841d78d78f
 +        orphan.mkdir(parents=True)
 +        with patch.object(
 +            desktop, "running_pids",
-+            side_effect=lambda d, p=None: [77] if d.name.startswith("9-") else [],
++            side_effect=lambda d, p=None, **_: [77] if d.name.startswith("9-") else [],
 +        ), patch.object(desktop, "quit_instance", return_value=True) as quit:
 +            assert manager.quit([], all_accounts=True) == 0
 +        assert [c.args[0].name for c in quit.call_args_list] == [
@@ -1409,7 +1450,7 @@ index 0000000000000000000000000000000000000000..e95aaf4bed79af3c2b9362841d78d78f
 +        manager.data_dir("2", "account2@example.com").mkdir(parents=True)
 +        with patch.object(
 +            desktop, "running_pids",
-+            side_effect=lambda d, p=None: [31] if d.name.startswith("1-") else [],
++            side_effect=lambda d, p=None, **_: [31] if d.name.startswith("1-") else [],
 +        ):
 +            manager.show()
 +        out = _plain(capsys.readouterr().out)
@@ -1606,6 +1647,25 @@ index 0000000000000000000000000000000000000000..e95aaf4bed79af3c2b9362841d78d78f
 +                switcher._delete_account_files("2", "account2@example.com")
 +        creds.assert_not_called()
 +
++    def test_remove_refuses_when_the_window_check_fails(self, switcher):
++        with patch.object(desktop.subprocess, "run", side_effect=OSError("no pgrep")), \
++             patch.object(switcher, "_ensure_no_live_session"), \
++             patch.object(switcher, "_delete_account_credentials") as creds:
++            with pytest.raises(SessionError, match="Could not tell"):
++                switcher._delete_account_files("2", "account2@example.com")
++        creds.assert_not_called()
++
++    def test_remove_keeps_the_account_when_the_profile_will_not_go(self, switcher):
++        profile = desktop_dir_for(switcher.backup_dir, "2", "account2@example.com")
++        profile.mkdir(parents=True)
++        with patch.object(desktop, "running_pids", return_value=[]), \
++             patch.object(desktop.shutil, "rmtree", side_effect=OSError("busy")), \
++             patch.object(switcher, "_ensure_no_live_session"), \
++             patch.object(switcher, "_delete_account_credentials") as creds:
++            with pytest.raises(SessionError, match="Could not remove .*busy"):
++                switcher._delete_account_files("2", "account2@example.com")
++        creds.assert_not_called()
++
 +    def test_remove_takes_the_desktop_profile_with_the_account(self, switcher):
 +        profile = desktop_dir_for(switcher.backup_dir, "2", "account2@example.com")
 +        profile.mkdir(parents=True)
@@ -1624,6 +1684,16 @@ index 0000000000000000000000000000000000000000..e95aaf4bed79af3c2b9362841d78d78f
 +            with pytest.raises(SessionError, match="Claude Desktop window.*--quit --all"):
 +                switcher.purge()
 +        ask.assert_not_called()
++
++    def test_purge_refuses_when_the_window_check_fails(self, switcher):
++        profile = desktop_dir_for(switcher.backup_dir, "1", "account1@example.com")
++        profile.mkdir(parents=True)
++        with patch.object(desktop.subprocess, "run", side_effect=OSError("no pgrep")), \
++             patch("builtins.input") as ask:
++            with pytest.raises(SessionError, match="Could not tell"):
++                switcher.purge()
++        ask.assert_not_called()
++        assert profile.exists()
 +
 +    def test_purge_lists_and_removes_desktop_profiles(self, switcher, capsys):
 +        profile = desktop_dir_for(switcher.backup_dir, "1", "account1@example.com")
