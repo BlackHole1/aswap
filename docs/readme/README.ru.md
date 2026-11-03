@@ -6,15 +6,13 @@
 
 <img src="../images/cswap-list.png" alt="cswap list: two accounts with their 5h, 7d and per-model usage, then cswap switch 2" width="820">
 
-Переключение аккаунтов для Claude Code: [claude-swap](https://github.com/realiti4/claude-swap) (`cswap`) с поддерживаемым набором исправлений.
+Переключение между аккаунтами Claude Code через [claude-swap](https://github.com/realiti4/claude-swap) с поддерживаемым набором исправлений и новых возможностей.
 
 </div>
 
-`cswap` переключает несколько аккаунтов Claude, отслеживает использование каждого и может перевести вас на аккаунт с наибольшим остатком квоты. aswap - тот же инструмент: неизмененный исходный код upstream плюс небольшая серия патчей для ошибок, которые upstream еще не исправил. Вы по-прежнему запускаете `cswap`.
+`cswap` управляет несколькими аккаунтами Claude. Он отслеживает расход лимитов каждого аккаунта и умеет переключаться на аккаунт с наибольшим остатком квоты. aswap собирает `cswap` из неизменённого исходного кода upstream и применяет поверх него небольшой набор патчей. Все команды `cswap` работают как прежде.
 
-## Название
-
-aswap - сокращение от **account swap** (переключение аккаунтов), то есть от того, что делает инструмент. Рядом с `cswap` буква `a` - это и то, что добавляет проект: aswap это cswap плюс серия патчей. По мере того как Claude Code становится универсальной средой для агентов, та же `a` подходит и к аккаунтам AI и агентов, которые приходят вместе с этим.
+Название расшифровывается как **account swap**.
 
 ## Установка
 
@@ -23,51 +21,68 @@ uv tool install aswap  # или: pipx install aswap
 aswap --version
 ```
 
-`aswap` принимает все команды `cswap`. Он ставится рядом с upstream `cswap` и не меняет его. Чтобы имя `cswap` тоже запускало aswap:
+`aswap` принимает все команды `cswap`. Он устанавливается рядом с upstream-версией `cswap` и не затрагивает её.
+
+Чтобы aswap запускался и под именем `cswap`:
 
 ```bash
-aswap link  # создает лаунчер cswap рядом с aswap; aswap unlink удаляет его
+aswap link    # добавить лаунчер cswap рядом с aswap
+aswap unlink  # удалить его
 ```
 
-`aswap link` заменяет только тот `cswap`, который создал сам. Сначала удалите upstream (`uv tool uninstall claude-swap`) или передайте `--force`.
+`aswap link` заменяет только тот лаунчер `cswap`, который создан при установке aswap. Чтобы заменить upstream `cswap`, сначала удалите его (`uv tool uninstall claude-swap`) или передайте `--force`.
 
-## Обновление
+Для обновления выполните `aswap upgrade`. Команда вызывает `uv tool upgrade` или `pipx upgrade` в зависимости от того, как был установлен aswap.
 
-```bash
-aswap upgrade  # uv tool upgrade aswap или pipx upgrade aswap, в зависимости от способа установки
-```
+## Что добавляет aswap
 
-Сборка из исходников и замена установленного `cswap` из PyPI пропатченной сборкой описаны в [CONTRIBUTING.md](../../CONTRIBUTING.md).
+### Обновление расхода по запросу
 
-## Что исправляют патчи
-
-`cswap refresh` запрашивает использование прямо сейчас, по одному аккаунту за раз, и показывает, когда аккаунт, ограниченный по частоте запросов, сможет повторить попытку:
+`cswap refresh [account ...]` сразу запрашивает данные о расходе, по одному аккаунту за раз. Если для аккаунта сработало ограничение частоты запросов, команда показывает, когда сервер разрешит следующую попытку.
 
 <img src="../images/cswap-refresh.png" alt="cswap refresh: one account refreshed, the other rate limited with the server retry time" width="820">
 
-`cswap desktop --all` открывает по одному окну Claude Desktop на каждый сохраненный аккаунт, каждое со своим входом:
+### Отдельное окно Claude Desktop для каждого аккаунта
+
+Claude Desktop поддерживает только один вход в аккаунт одновременно. `cswap desktop 2` открывает аккаунт 2 в отдельном окне с собственным входом, а `cswap desktop --all` открывает все аккаунты. Вкладка Code в каждом окне показывает одни и те же локальные сессии (кроме Windows). Подход заимствован у [guise](https://github.com/siddhjagani/guise).
 
 <img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
-`cswap chrome 2` открывает аккаунт 2 в собственной копии обычного профиля Chrome, так что расширение Claude in Chrome там работает как аккаунт 2, а обычный браузер сохраняет свой вход:
+### Отдельный профиль Chrome для каждого аккаунта
+
+Claude in Chrome использует вход в claude.ai из браузера, а не аккаунт, выбранный через `cswap switch` ([upstream #256](https://github.com/realiti4/claude-swap/issues/256)). `cswap chrome 2` открывает аккаунт 2 в отдельной копии вашего профиля Chrome. Расширение в ней работает от имени аккаунта 2, а основной браузер сохраняет свой вход.
 
 <img src="../images/cswap-chrome.png" alt="cswap chrome 2 opening a copy of the stock Chrome profile for account 2, cswap chrome 1 opening account 1, then cswap chrome listing both as open" width="820">
 
-| патч                                                                                                                                                | проблема                                                                                                                                                                                                                                                                                                                                                                                          |
-| --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [Следовать за настоящим владельцем учетных данных](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch)    | Устаревший `~/.claude.json` может по-прежнему указывать на аккаунт B, пока в keychain уже лежит токен аккаунта A. Upstream помечает A как "re-login needed" и перестает обновлять B.                                                                                                                                                                                                              |
-| [Следовать за установленным дистрибутивом](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)               | Версия, проверка обновлений и `upgrade` жестко прописывают имя `claude-swap`, поэтому при установке как `aswap` они ломаются.                                                                                                                                                                                                                                                                     |
-| [Обновить usage по запросу](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)                            | Upstream обновляет usage только по своему расписанию, поэтому экраны показывают кэш и не пишут срок повтора от сервера. `cswap refresh [аккаунт ...]` запрашивает сразу, по одному аккаунту.                                                                                                                                                                                                      |
-| [Слияние истории без потерь](../../patches/fix_set_aside_a_differing_history_file_instead_of_dropping_the_profiles_copy.patch)                      | При слиянии истории профиля в `~/.claude` одноимённые файлы удаляются без чтения, и пропадает поздняя сессия или `memory/MEMORY.md`. Отличающийся файл остается в `history-conflicts/`.                                                                                                                                                                                                           |
-| [Одна история диалогов на все аккаунты](../../patches/feat_share_one_conversation_history_across_accounts_by_default.patch)                         | Без `--share-history` при каждом запуске `claude --resume` не находит диалог после смены аккаунта по умолчанию (upstream #239). Общая история теперь включена по умолчанию (`run.shareHistory`).                                                                                                                                                                                                  |
-| [Открыть Claude Desktop под каждым аккаунтом](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)              | Claude Desktop хранит один логин на профиль, поэтому второй аккаунт означает выход и вход заново. `cswap desktop 2` открывает аккаунт 2 в своем окне и оставляет остальные открытыми, как [guise](https://github.com/siddhjagani/guise). Вкладка Code показывает те же локальные сессии.                                                                                                          |
-| [Открыть Chrome под каждым аккаунтом для Claude in Chrome](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch) | Claude in Chrome остается на cookie claude.ai в браузере, а не на аккаунте, который выбрал `cswap switch` (upstream #256). `cswap chrome 2` открывает аккаунт 2 в своем профиле Chrome. После закрытия этого окна `cswap chrome --sync 2` снова копирует ваш профиль. `chrome.followSwitch` выводит окно вперед при переключении, а `chrome.appPath` может указывать на Edge, Brave или Chromium. |
+- `cswap chrome --sync 2` заново копирует текущий профиль Chrome в аккаунт 2. Сначала закройте его окно.
+- `cswap config set chrome.followSwitch true` выводит браузер аккаунта на передний план при `cswap switch`.
+- `cswap config set chrome.appPath <path>` позволяет использовать другой браузер на базе Chromium, например Edge или Brave.
 
-Каждый патч - один коммит. Сообщение коммита объясняет проблему upstream. Полный список в [patches/.patches](../../patches/.patches).
+### Общая история диалогов
 
-## Как это собрано
+`cswap run` по умолчанию ведёт одну историю диалогов для всех аккаунтов. После переключения аккаунта `claude --resume` находит прежние диалоги ([upstream #239](https://github.com/realiti4/claude-swap/issues/239)). Чтобы хранить историю отдельно для каждого аккаунта, выполните `cswap config set run.shareHistory false`. В Windows не поддерживается.
 
-Проект закрепляет один коммит upstream в `upstream.json`, клонирует его без изменений в `cswap/` и хранит каждое изменение в `patches/` как обычный патч для `git am`. Патчи применяются в порядке из `patches/.patches`. Так же [Electron управляет патчами для Node и Chromium](https://github.com/electron/electron/tree/main/patches): дельта остается небольшой и читаемой, переход на новый upstream - это rebase серии. Подробности, команды и рабочий процесс с патчами описаны в [CONTRIBUTING.md](../../CONTRIBUTING.md).
+### Исправления ошибок
+
+- **Устаревшая конфигурация аккаунта.** Если `~/.claude.json` всё ещё указывает на аккаунт B, а в связке ключей лежит токен аккаунта A, upstream просит заново войти в A и перестаёт обновлять B. aswap ориентируется на аккаунт, которому принадлежит действующий токен.
+- **Потеря файлов истории.** Когда upstream переносит историю профиля в `~/.claude`, он удаляет файлы с совпадающими именами, не сравнивая их. Так можно потерять сессию или `memory/MEMORY.md`. aswap откладывает различающиеся файлы в `history-conflicts/`.
+- **Версия и обновление.** `--version`, проверка обновлений и `upgrade` жёстко привязаны к пакету `claude-swap`. aswap использует тот пакет, из которого был установлен.
+
+## Как это устроено
+
+`upstream.json` фиксирует один коммит upstream. `bun run setup` клонирует этот коммит без изменений в `cswap/`. Затем он применяет все патчи из `patches/` через `git am` в порядке, указанном в [patches/.patches](../../patches/.patches). Схема повторяет [структуру, которую Electron использует для патчей Chromium и Node](https://github.com/electron/electron/tree/main/patches). Каждый diff остаётся небольшим и читаемым, а переход на новую версию upstream сводится к rebase серии патчей.
+
+| Патч                                                                                                                                            | Изменение                                     |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| [Привязка к владельцу действующих учётных данных](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | Исправление: устаревшая конфигурация аккаунта |
+| [Привязка к установленному дистрибутиву](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)             | Исправление: версия и обновление              |
+| [Обновление расхода по запросу](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)                    | Функция: `cswap refresh`                      |
+| [Сохранение файлов истории при слиянии](../../patches/fix_set_aside_a_differing_history_file_instead_of_dropping_the_profiles_copy.patch)       | Исправление: потеря файлов истории            |
+| [Единая история диалогов](../../patches/feat_share_one_conversation_history_across_accounts_by_default.patch)                                   | Функция: общая история диалогов               |
+| [Claude Desktop для каждого аккаунта](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)                  | Функция: `cswap desktop`                      |
+| [Chrome для каждого аккаунта](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                          | Функция: `cswap chrome`                       |
+
+Каждый патч представляет собой один коммит, а его сообщение описывает проблему в upstream. Сборка из исходников и работа с патчами описаны в [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
 ## Лицензия
 
