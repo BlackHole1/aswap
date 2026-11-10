@@ -58,29 +58,22 @@ Claude in Chrome uses the browser's claude.ai login, not the account picked by `
 - `cswap config set chrome.followSwitch true` brings the account's browser forward on `cswap switch`.
 - `cswap config set chrome.appPath <path>` uses another Chromium browser, such as Edge or Brave.
 
-### Shared conversation history
-
-`cswap run` shares one conversation history across all accounts by default. `claude --resume` finds earlier conversations after you switch accounts ([upstream #239](https://github.com/realiti4/claude-swap/issues/239)). To keep history per account, run `cswap config set run.shareHistory false`. Not supported on Windows.
-
 ### Bug fixes
 
 - **Stale account config.** If `~/.claude.json` still names account B while the keychain holds account A's token, upstream asks to log in to A again and stops refreshing B. aswap follows the account that owns the live token.
-- **Lost history files.** When upstream merges a profile's history into `~/.claude`, it deletes same-named files without comparing them. This can lose a session or `memory/MEMORY.md`. aswap sets differing files aside under `history-conflicts/`.
 - **Version and upgrade.** `--version`, the update check, and `upgrade` are hard-coded to the `claude-swap` package. aswap uses the package it was installed from.
 
 ## How it is built
 
 `upstream.json` pins one upstream commit. `bun run setup` clones that commit unchanged into `cswap/`. It then applies every patch in `patches/` with `git am`, in the order listed in [patches/.patches](patches/.patches). This follows [the layout Electron uses for its Chromium and Node patches](https://github.com/electron/electron/tree/main/patches). Each diff stays small and readable, and moving to a newer upstream is a rebase of the series.
 
-| Patch                                                                                                                         | Change                               |
-| ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| [Follow the live credential's owner](patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch)  | Fix: stale account config            |
-| [Follow the installed distribution](patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)      | Fix: version and upgrade             |
-| [Refresh usage on demand](patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)              | Feature: `cswap refresh`             |
-| [Keep history files when merging](patches/fix_set_aside_a_differing_history_file_instead_of_dropping_the_profiles_copy.patch) | Fix: lost history files              |
-| [Share one conversation history](patches/feat_share_one_conversation_history_across_accounts_by_default.patch)                | Feature: shared conversation history |
-| [Open Claude Desktop per account](patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)          | Feature: `cswap desktop`             |
-| [Open Chrome per account](patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                  | Feature: `cswap chrome`              |
+| Patch                                                                                                                        | Change                    |
+| ---------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| [Follow the live credential's owner](patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | Fix: stale account config |
+| [Follow the installed distribution](patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)     | Fix: version and upgrade  |
+| [Refresh usage on demand](patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)             | Feature: `cswap refresh`  |
+| [Open Claude Desktop per account](patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)         | Feature: `cswap desktop`  |
+| [Open Chrome per account](patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                 | Feature: `cswap chrome`   |
 
 Each patch is a single commit, and its message explains the upstream problem. To build from source or work on patches, see [CONTRIBUTING.md](CONTRIBUTING.md).
 

@@ -58,29 +58,22 @@ Claude in Chrome utilise la connexion claude.ai du navigateur, et non le compte 
 - `cswap config set chrome.followSwitch true` met au premier plan le navigateur du compte lors d'un `cswap switch`.
 - `cswap config set chrome.appPath <path>` utilise un autre navigateur Chromium, comme Edge ou Brave.
 
-### Historique des conversations partagé
-
-Par défaut, `cswap run` partage un même historique des conversations entre tous les comptes. Après un changement de compte, `claude --resume` retrouve les conversations précédentes ([upstream #239](https://github.com/realiti4/claude-swap/issues/239)). Pour conserver un historique par compte, lancez `cswap config set run.shareHistory false`. Non pris en charge sous Windows.
-
 ### Corrections de bugs
 
 - **Configuration de compte obsolète.** Si `~/.claude.json` désigne encore le compte B alors que le trousseau contient le jeton du compte A, la version amont redemande une connexion au compte A et cesse d'actualiser le compte B. aswap suit le compte auquel appartient le jeton actif.
-- **Fichiers d'historique perdus.** Lorsque la version amont fusionne l'historique d'un profil dans `~/.claude`, elle supprime les fichiers de même nom sans les comparer. Une session ou `memory/MEMORY.md` peut ainsi être perdu. aswap met de côté les fichiers divergents dans `history-conflicts/`.
 - **Version et mise à jour.** `--version`, la vérification des mises à jour et `upgrade` sont codés en dur sur le paquet `claude-swap`. aswap utilise le paquet à partir duquel il a été installé.
 
 ## Construction
 
 `upstream.json` fixe un commit amont. `bun run setup` clone ce commit tel quel dans `cswap/`, puis applique avec `git am` chaque patch de `patches/`, dans l'ordre indiqué par [patches/.patches](../../patches/.patches). Cette organisation reprend [celle qu'utilise Electron pour ses patchs Chromium et Node](https://github.com/electron/electron/tree/main/patches). Chaque diff reste court et lisible, et passer à une version amont plus récente revient à rebaser la série.
 
-| Patch                                                                                                                                                     | Changement                                            |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| [Suivre le propriétaire de l'identifiant actif](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch)             | Correctif : configuration de compte obsolète          |
-| [Suivre la distribution installée](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)                             | Correctif : version et mise à jour                    |
-| [Actualiser la consommation à la demande](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)                    | Fonctionnalité : `cswap refresh`                      |
-| [Conserver les fichiers d'historique lors de la fusion](../../patches/fix_set_aside_a_differing_history_file_instead_of_dropping_the_profiles_copy.patch) | Correctif : fichiers d'historique perdus              |
-| [Partager un même historique des conversations](../../patches/feat_share_one_conversation_history_across_accounts_by_default.patch)                       | Fonctionnalité : historique des conversations partagé |
-| [Ouvrir Claude Desktop par compte](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)                               | Fonctionnalité : `cswap desktop`                      |
-| [Ouvrir Chrome par compte](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                                       | Fonctionnalité : `cswap chrome`                       |
+| Patch                                                                                                                                         | Changement                                   |
+| --------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| [Suivre le propriétaire de l'identifiant actif](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | Correctif : configuration de compte obsolète |
+| [Suivre la distribution installée](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)                 | Correctif : version et mise à jour           |
+| [Actualiser la consommation à la demande](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)        | Fonctionnalité : `cswap refresh`             |
+| [Ouvrir Claude Desktop par compte](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)                   | Fonctionnalité : `cswap desktop`             |
+| [Ouvrir Chrome par compte](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                           | Fonctionnalité : `cswap chrome`              |
 
 Chaque patch est un commit unique, dont le message explique le problème amont. Pour compiler depuis les sources ou travailler sur les patchs, consultez [CONTRIBUTING.md](../../CONTRIBUTING.md).
 

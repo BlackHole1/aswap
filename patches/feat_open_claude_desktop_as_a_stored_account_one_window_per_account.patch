@@ -42,16 +42,24 @@ otherwise deletes the profile with the slot, and `purge` refuses while
 any window is open and lists the profiles it removes, the same way both
 treat session profiles.
 
+`swap` and `move` take the profile along to the account's new slot
+number, because the directory is named after it: left behind, it would be
+deleted with the old slot's files and the account would open signed out.
+Both refuse while the account's window is open. A profile that cannot be
+renamed fails the swap or move with everything put back, where a session
+profile is merely skipped, because the login in it cannot be rebuilt from
+the backups.
+
 Opening an account that the stock window is signed in as right now is
 allowed but warned about: both windows then work on the same session
 files, each cached in its own memory, so nothing syncs live, their
 writes overwrite each other, and only a reload rereads from disk.
 
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index 9777aca429c403eb1e81bfbf2d9ce7e44a74ce1c..14e985d4be4c4cd72ecaa04b70c46ca1e7489af2 100644
+index 4d2465e0299c7240f1751864a8def206a5ab7261..cbfe081448cbd8f9730979970116862b9148fef8 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
-@@ -425,6 +425,84 @@ def _refresh_command(argv: list[str]) -> None:
+@@ -404,6 +404,84 @@ def _refresh_command(argv: list[str]) -> None:
          sys.exit(code)
  
  
@@ -136,7 +144,7 @@ index 9777aca429c403eb1e81bfbf2d9ce7e44a74ce1c..14e985d4be4c4cd72ecaa04b70c46ca1
  def _unclaimed_command(argv: list[str]) -> None:
      """Handle `cswap unclaimed [--purge ID]` — inspect or drop a stash row.
  
-@@ -1259,6 +1337,9 @@ def main() -> None:
+@@ -1449,6 +1527,9 @@ def main() -> None:
      if argv and argv[0] == "refresh":
          _refresh_command(argv[1:])
          return
@@ -146,7 +154,7 @@ index 9777aca429c403eb1e81bfbf2d9ce7e44a74ce1c..14e985d4be4c4cd72ecaa04b70c46ca1
      if argv and argv[0] == "alias":
          _alias_command(argv[1:])
          return
-@@ -1310,6 +1391,10 @@ Commands:
+@@ -1500,6 +1581,10 @@ Commands:
    %(prog)s priority                   list account priorities
    %(prog)s run <num|email> [-- ...]   run as an account, this terminal only
    %(prog)s run                        run the current dir's mapped account
@@ -157,7 +165,7 @@ index 9777aca429c403eb1e81bfbf2d9ce7e44a74ce1c..14e985d4be4c4cd72ecaa04b70c46ca1
    %(prog)s map <num|email> [path]     map a directory to an account
    %(prog)s map                        list directory mappings
    %(prog)s unmap [path]               remove a directory mapping
-@@ -1343,6 +1428,7 @@ Aliases: ls=list  rm=remove  update=upgrade""",
+@@ -1533,6 +1618,7 @@ Aliases: ls=list  rm=remove  update=upgrade""",
    %(prog)s add --slot 3                      # add to a specific slot
    %(prog)s add-token sk-ant-oat01-... --email me@example.com
    %(prog)s run 2 -- --resume                 # forward args after '--' to claude
@@ -167,10 +175,10 @@ index 9777aca429c403eb1e81bfbf2d9ce7e44a74ce1c..14e985d4be4c4cd72ecaa04b70c46ca1
  
 diff --git a/src/claude_swap/desktop.py b/src/claude_swap/desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..4831085cf20ff6cf02531600b1b9d972e6628892
+index 0000000000000000000000000000000000000000..cd1bfce3dff283eae95d8617c126d1d49e5f40a5
 --- /dev/null
 +++ b/src/claude_swap/desktop.py
-@@ -0,0 +1,684 @@
+@@ -0,0 +1,782 @@
 +"""Claude Desktop, one window per stored account.
 +
 +Claude Desktop holds one login per profile: to use a second account the
@@ -199,6 +207,7 @@ index 0000000000000000000000000000000000000000..4831085cf20ff6cf02531600b1b9d972
 +
 +from __future__ import annotations
 +
++import filecmp
 +import json
 +import os
 +import re
@@ -206,6 +215,7 @@ index 0000000000000000000000000000000000000000..4831085cf20ff6cf02531600b1b9d972
 +import subprocess
 +import sys
 +import time
++import uuid
 +from dataclasses import dataclass
 +from pathlib import Path
 +from typing import TYPE_CHECKING
@@ -213,7 +223,7 @@ index 0000000000000000000000000000000000000000..4831085cf20ff6cf02531600b1b9d972
 +from claude_swap.exceptions import AccountNotFoundError, ConfigError, SessionError
 +from claude_swap.models import Platform
 +from claude_swap.printer import accent, bold_accent, dimmed, error, muted, warning
-+from claude_swap.session import conflict_run_name, slugify_email
++from claude_swap.session import QUARANTINE_DIRNAME, slugify_email
 +
 +if TYPE_CHECKING:
 +    from claude_swap.switcher import ClaudeAccountSwitcher
@@ -221,6 +231,8 @@ index 0000000000000000000000000000000000000000..4831085cf20ff6cf02531600b1b9d972
 +DESKTOP_DIRNAME = "desktop"
 +USER_DATA_FLAG = "--user-data-dir"
 +QUIT_TIMEOUT_S = 5.0
++# Where a profile waits between its old slot's name and its new one.
++RELOCATING_SUFFIX = ".relocating"
 +
 +
 +def desktop_dir_for(backup_dir: Path, account_num: str, email: str) -> Path:
@@ -540,6 +552,55 @@ index 0000000000000000000000000000000000000000..4831085cf20ff6cf02531600b1b9d972
 +            pass
 +
 +
++def relocate_profile_dirs(moves: list[tuple[Path, Path]], what: str) -> None:
++    """Rename every ``(old, new)`` profile directory: all of them, or none.
++
++    A profile directory is named after its account's slot number, so
++    ``cswap swap`` and ``cswap move`` have to take it along. Left behind, it
++    would be deleted with the old slot's files, and the account would open
++    an empty profile under its new number. Two accounts that share an email
++    trade the same two paths, so every source is parked under a temporary
++    name before any of them takes its new one. A source that does not exist
++    is skipped: that account never opened a window.
++
++    Raises:
++        SessionError: a rename failed, a destination is already taken, or a
++            temporary name is left over from an interrupted move. The
++            renames already made are undone first.
++    """
++    done: list[tuple[Path, Path]] = []
++    try:
++        parked: list[tuple[Path, Path]] = []
++        for old, new in moves:
++            if not old.exists():
++                continue
++            temp = old.with_name(old.name + RELOCATING_SUFFIX)
++            if temp.exists():
++                raise FileExistsError(f"{temp} is left over from an interrupted move")
++            os.replace(old, temp)
++            done.append((old, temp))
++            parked.append((temp, new))
++        for temp, new in parked:
++            if new.exists():
++                raise FileExistsError(f"{new} already exists")
++            os.replace(temp, new)
++            done.append((temp, new))
++    except OSError as exc:
++        stranded = []
++        for before, after in reversed(done):
++            try:
++                os.replace(after, before)
++            except OSError:
++                stranded.append(str(after))
++        outcome = (
++            f"A profile is left at {', '.join(stranded)}."
++            if stranded else "Nothing was changed."
++        )
++        raise SessionError(
++            f"Could not move the {what} profile to its new slot: {exc}. {outcome}"
++        ) from exc
++
++
 +@dataclass(frozen=True)
 +class DesktopProfile:
 +    """One account's Claude Desktop profile as ``cswap desktop`` lists it."""
@@ -766,9 +827,12 @@ index 0000000000000000000000000000000000000000..4831085cf20ff6cf02531600b1b9d972
 +                    continue
 +                dest.unlink()
 +            elif dest.is_dir():
++                # The time, for reading, plus a random suffix, so two merges
++                # in the same second never share a directory.
++                run = f"{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
 +                conflicts = (
-+                    self.switcher.backup_dir / "history-conflicts"
-+                    / f"desktop-{data_dir.name}" / conflict_run_name()
++                    self.switcher.backup_dir / QUARANTINE_DIRNAME
++                    / f"desktop-{data_dir.name}" / run
 +                )
 +                try:
 +                    set_aside = self._merge_into(src, dest, conflicts)
@@ -799,11 +863,41 @@ index 0000000000000000000000000000000000000000..4831085cf20ff6cf02531600b1b9d972
 +        except OSError:
 +            return False
 +
-+    @staticmethod
-+    def _merge_into(src: Path, dest: Path, conflicts: Path) -> int:
-+        from claude_swap.session import SessionManager
++    @classmethod
++    def _merge_into(cls, src: Path, dest: Path, conflicts: Path) -> int:
++        """Move the profile's own directory at ``dest`` into ``src``.
 +
-+        return SessionManager._merge_history_into_source(src, dest, conflicts)
++        File by file. A file that already exists under ``src`` is dropped
++        only when both copies are byte-identical; a differing copy is moved
++        to ``conflicts/<dest.name>/<relative path>``, so the stock copy is
++        never overwritten and the profile's copy is never lost. ``dest`` is
++        removed once empty; an OSError propagates and leaves the remaining
++        files in place for the next try. Returns how many files were set
++        aside.
++
++        Not ``SessionManager``'s history merge: that one decides between two
++        Claude Code transcripts by their timestamps and by which sessions are
++        live in ``~/.claude``, neither of which means anything for the
++        desktop app's state files.
++        """
++        set_aside = 0
++        cls._mkdir_private(src)
++        for path in sorted(dest.rglob("*"), reverse=True):
++            rel = path.relative_to(dest)
++            target = src / rel
++            if path.is_dir() and not path.is_symlink():
++                path.rmdir()  # children already moved (reverse walk)
++                continue
++            if target.exists():
++                if filecmp.cmp(str(path), str(target), shallow=False):
++                    path.unlink()
++                    continue
++                target = conflicts / dest.name / rel
++                set_aside += 1
++            cls._mkdir_private(target.parent)
++            shutil.move(str(path), str(target))
++        dest.rmdir()
++        return set_aside
 +
 +    # -- lifecycle hooks used by the switcher ------------------------------
 +
@@ -820,6 +914,18 @@ index 0000000000000000000000000000000000000000..4831085cf20ff6cf02531600b1b9d972
 +                f"PID {', '.join(map(str, pids))}. Close it first "
 +                f"('cswap desktop --quit {account_num}'), then retry {action}."
 +            )
++
++    def relocate_profiles(self, moves: list[tuple[str, str, str]]) -> None:
++        """Take profiles along to new slot numbers, one ``(old number, new
++        number, email)`` per account that moves. Only called once
++        :meth:`ensure_closed` passed for each of them."""
++        relocate_profile_dirs(
++            [
++                (self.data_dir(old, email), self.data_dir(new, email))
++                for old, new, email in moves
++            ],
++            "Claude Desktop",
++        )
 +
 +    def delete_profile(self, account_num: str, email: str) -> None:
 +        """Remove the account's profile directory; the login goes with it."""
@@ -856,22 +962,22 @@ index 0000000000000000000000000000000000000000..4831085cf20ff6cf02531600b1b9d972
 +            os.chmod(path, 0o700)
 +
 diff --git a/src/claude_swap/settings.py b/src/claude_swap/settings.py
-index d40c816f238e377b871d82bcb0cdaa15b1ae8727..003767966e1e31e2712bfbef7144cdf430b98485 100644
+index ef3a6f0b281f0b62738e7439064b9fbac8bb7fea..3beab49af85e901cdc28eeb77eec8acedecfe6ad 100644
 --- a/src/claude_swap/settings.py
 +++ b/src/claude_swap/settings.py
 @@ -2,8 +2,8 @@
  
  One versioned JSON file for user-tunable claude-swap preferences, written
  atomically with the backup dir's 0600/0700 modes. v1 carries the
--``autoswitch``, ``ui``, ``run`` and ``updates`` sections; other sections can be added
--additively.
-+``autoswitch``, ``ui``, ``run``, ``updates`` and ``desktop`` sections; other
-+sections can be added additively.
+-``autoswitch``, ``ui``, ``run``, ``updates`` and ``usage`` sections; other sections can
+-be added additively.
++``autoswitch``, ``ui``, ``run``, ``updates``, ``usage`` and ``desktop`` sections;
++other sections can be added additively.
  Unknown keys (future fields, other tools' experiments) survive a round trip.
  
  Reading is forgiving — a missing or corrupt file yields defaults with a logged
-@@ -100,11 +100,28 @@ class UpdateSettings:
-     check: bool = True
+@@ -116,12 +116,29 @@ class UsageSettings:
+     header_probe: bool = False
  
  
 +@dataclass(frozen=True)
@@ -895,13 +1001,14 @@ index d40c816f238e377b871d82bcb0cdaa15b1ae8727..003767966e1e31e2712bfbef7144cdf4
      "ui": UiSettings,
      "run": RunSettings,
      "updates": UpdateSettings,
+     "usage": UsageSettings,
 +    "desktop": DesktopSettings,
  }
  
  
-@@ -189,6 +206,14 @@ SETTING_SPECS: dict[str, SettingSpec] = {
-             "updates", "check", "check", "bool",
-             help="Check PyPI once a day and print a hint when a newer release exists",
+@@ -210,6 +227,14 @@ SETTING_SPECS: dict[str, SettingSpec] = {
+             "usage", "headerProbe", "header_probe", "bool",
+             help="Read setup-token usage from a 1-token Haiku request's rate-limit headers (opt-in: uses quota)",
          ),
 +        SettingSpec(
 +            "desktop", "appPath", "app_path", "string",
@@ -914,8 +1021,8 @@ index d40c816f238e377b871d82bcb0cdaa15b1ae8727..003767966e1e31e2712bfbef7144cdf4
      )
  }
  
-@@ -354,6 +379,31 @@ def load_update_settings(backup_root: Path) -> UpdateSettings:
-     return UpdateSettings(check=check)
+@@ -397,6 +422,31 @@ def load_usage_settings(backup_root: Path) -> UsageSettings:
+     return UsageSettings(header_probe=header_probe)
  
  
 +def load_desktop_settings(backup_root: Path) -> DesktopSettings:
@@ -946,19 +1053,75 @@ index d40c816f238e377b871d82bcb0cdaa15b1ae8727..003767966e1e31e2712bfbef7144cdf4
  def save_settings(backup_root: Path, settings: AutoSwitchSettings) -> None:
      """Write the autoswitch section, preserving unknown keys and sections."""
      path = settings_path(backup_root)
-@@ -527,6 +577,7 @@ def effective_settings(backup_root: Path) -> list[tuple[SettingSpec, object, boo
-         "ui": load_ui_settings(backup_root),
+@@ -571,6 +621,7 @@ def effective_settings(backup_root: Path) -> list[tuple[SettingSpec, object, boo
          "run": load_run_settings(backup_root),
          "updates": load_update_settings(backup_root),
+         "usage": load_usage_settings(backup_root),
 +        "desktop": load_desktop_settings(backup_root),
      }
      rows = []
      for spec in SETTING_SPECS.values():
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index 7397d4dba2d86834c59b72d6bf2b093dcf6e0fe9..c49518231c374578b54fadd99c8c20ac7791de2d 100644
+index 9afbf6708bb21019312826924b648287251ec89b..d109912957c6f9c58c552c359121167903ecc78c 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
-@@ -973,12 +973,23 @@ class ClaudeAccountSwitcher:
+@@ -990,6 +990,55 @@ class ClaudeAccountSwitcher:
+         """Pre-commit clear that raises when the key still reads non-empty."""
+         self._store.delete_account_credentials_strict(account_num, email)
+ 
++    def _app_profile_managers(self) -> list:
++        """Whatever keeps a per-account app profile in a directory named
++        after the slot number, which swap and move therefore take along."""
++        return [self._desktop_manager()]
++
++    def _ensure_app_profiles_closed(
++        self, account_num: str, email: str, action: str
++    ) -> None:
++        """Refuse ``action`` while one of the account's app windows is open:
++        its profile directory is about to be renamed under it."""
++        for manager in self._app_profile_managers():
++            manager.ensure_closed(account_num, email, action)
++
++    def _relocate_app_profiles(
++        self, moves: list[tuple[str, str, str]], done: list
++    ) -> None:
++        """Take the app profiles of every ``(old slot, new slot, email)`` to
++        the new slot number.
++
++        Unlike a session profile, which ``setup_session`` rebuilds from the
++        relocated backups, an app profile holds a login nothing else has: one
++        that stays behind is deleted with the old slot's files. So a profile
++        that cannot be moved fails the swap or move instead of being skipped.
++        ``done`` collects the managers that finished, for
++        :meth:`_restore_app_profiles`.
++
++        Raises:
++            SessionError: a profile could not be moved; that manager's own
++                renames are already undone.
++        """
++        for manager in self._app_profile_managers():
++            manager.relocate_profiles(moves)
++            done.append(manager)
++
++    def _restore_app_profiles(
++        self, moves: list[tuple[str, str, str]], done: list
++    ) -> None:
++        """Put back what :meth:`_relocate_app_profiles` moved, best effort,
++        after a swap or move failed before its commit."""
++        back = [(new, old, email) for old, new, email in moves]
++        for manager in reversed(done):
++            try:
++                manager.relocate_profiles(back)
++            except SessionError as e:
++                self._logger.error(
++                    f"App profile not moved back after a failed swap/move: {e}"
++                )
++        done.clear()
++
+     def _delete_account_files(self, account_num: str, email: str) -> None:
+         """Delete all backup files for an account (credentials + config).
+ 
+@@ -1003,12 +1052,23 @@ class ClaudeAccountSwitcher:
              SessionError: a live session-mode instance is using this account.
          """
          self._ensure_no_live_session(account_num, email, "the operation")
@@ -982,7 +1145,74 @@ index 7397d4dba2d86834c59b72d6bf2b093dcf6e0fe9..c49518231c374578b54fadd99c8c20ac
      def _prune_mappings(self, email: str, org_uuid: str) -> None:
          """Drop directory mappings for an identity that no longer has a slot.
  
-@@ -8049,6 +8060,24 @@ class ClaudeAccountSwitcher:
+@@ -1253,6 +1313,8 @@ class ClaudeAccountSwitcher:
+         # under a running process.
+         self._ensure_no_live_session(num_a, email_a, "--swap-accounts")
+         self._ensure_no_live_session(num_b, email_b, "--swap-accounts")
++        self._ensure_app_profiles_closed(num_a, email_a, "--swap-accounts")
++        self._ensure_app_profiles_closed(num_b, email_b, "--swap-accounts")
+ 
+         # A profile that rotated past its backup advances the backup first:
+         # the backup is what moves, and the profile's Keychain item is deleted
+@@ -1274,6 +1336,8 @@ class ClaudeAccountSwitcher:
+         config_b = self._read_account_config(num_b, email_b)
+ 
+         staging: dict[str, Path] = {}
++        app_moves = [(num_a, num_b, email_a), (num_b, num_a, email_b)]
++        app_moved: list = []
+         try:
+             if email_a == email_b:
+                 # Same email: the two slots' backup keys fully overlap, so
+@@ -1289,6 +1353,7 @@ class ClaudeAccountSwitcher:
+             # accounts share an email the two paths swap directly, so stage the
+             # first through a temporary name.
+             self._swap_session_dirs(num_a, email_a, num_b, email_b)
++            self._relocate_app_profiles(app_moves, app_moved)
+ 
+             # Set each destination key to its owner's exact state: write
+             # material that exists, actively clear what doesn't. An empty
+@@ -1333,6 +1398,7 @@ class ClaudeAccountSwitcher:
+             # The commit point: _write_json's rename publishes the swap.
+             self._write_json(self.sequence_file, data)
+         except BaseException:
++            self._restore_app_profiles(app_moves, app_moved)
+             self._rollback_swap(
+                 num_a, email_a, creds_a, config_a,
+                 num_b, email_b, creds_b, config_b,
+@@ -1712,6 +1778,7 @@ class ClaudeAccountSwitcher:
+         # Relocating backups/session under a live session-mode claude would
+         # pull state out from under a running process.
+         self._ensure_no_live_session(num_src, email, "--move-account")
++        self._ensure_app_profiles_closed(num_src, email, "--move-account")
+ 
+         # Same as swap: the backup is what moves, and the profile's Keychain
+         # item is deleted with the old slot key, so a profile that rotated
+@@ -1729,6 +1796,8 @@ class ClaudeAccountSwitcher:
+ 
+         src_dir = self._session_dir(num_src, email)
+         dst_dir = self._session_dir(target, email)
++        app_moves = [(num_src, target, email)]
++        app_moved: list = []
+         try:
+             # Move the session profile to the account's new slot key, best
+             # effort: a profile that cannot be moved is pruned below with the
+@@ -1742,6 +1811,7 @@ class ClaudeAccountSwitcher:
+                     self._logger.warning(
+                         f"Session profile move skipped during move: {e}"
+                     )
++            self._relocate_app_profiles(app_moves, app_moved)
+ 
+             # Set the target key to the account's exact state: write material
+             # that exists, actively clear what doesn't — an unbacked account
+@@ -1776,6 +1846,7 @@ class ClaudeAccountSwitcher:
+             # Pre-commit failure: the records still point at num_src and its
+             # keys are untouched — drop any strays written under the target
+             # key and put the session profile back, best effort.
++            self._restore_app_profiles(app_moves, app_moved)
+             try:
+                 self._delete_account_credentials(target, email)
+                 self._delete_config_backup(target, email)
+@@ -8369,6 +8440,24 @@ class ClaudeAccountSwitcher:
                  "would pull a live profile out from under it. Repair or remove "
                  "them, then retry --purge."
              )
@@ -1007,16 +1237,16 @@ index 7397d4dba2d86834c59b72d6bf2b093dcf6e0fe9..c49518231c374578b54fadd99c8c20ac
  
          warning("This will remove ALL claude-swap data from your system:")
          print(f"  - Backup directory: {self.backup_dir}")
-@@ -8065,6 +8094,8 @@ class ClaudeAccountSwitcher:
-             print("  - All stored account credential files")
-         if session_dirs:
-             print("  - All session profiles and their Keychain entries")
+@@ -8406,6 +8495,8 @@ class ClaudeAccountSwitcher:
+                 )
+             )
+             print(dimmed("    Copy them somewhere else first if you want them."))
 +        if desktop_profiles:
 +            print("  - All Claude Desktop profiles (each account's desktop login)")
          print()
          print(dimmed("Note: This does NOT affect your current Claude Code login."))
          print()
-@@ -8124,6 +8155,10 @@ class ClaudeAccountSwitcher:
+@@ -8478,6 +8569,10 @@ class ClaudeAccountSwitcher:
              removed_items.append(
                  f"Session profiles: {', '.join(d.name for d in session_dirs)}"
              )
@@ -1028,37 +1258,37 @@ index 7397d4dba2d86834c59b72d6bf2b093dcf6e0fe9..c49518231c374578b54fadd99c8c20ac
          # Remove backup directory
          if self.backup_dir.exists():
 diff --git a/tests/test_config_cli.py b/tests/test_config_cli.py
-index 460e711d72e512963d1603c565c75281c97773df..c82e9ea4ff191b360bed82614740a2b6afb47b7f 100644
+index 81c1925bab6a3eaa15b234007f3696c6e7ece5e1..719af390f7d7b1c2495ab5a9a611708a4827aef5 100644
 --- a/tests/test_config_cli.py
 +++ b/tests/test_config_cli.py
-@@ -52,9 +52,11 @@ class TestConfigList:
-             "ui.theme",
+@@ -53,9 +53,11 @@ class TestConfigList:
              "run.shareHistory",
              "updates.check",
+             "usage.headerProbe",
 +            "desktop.appPath",
 +            "desktop.shareSessions",
          ):
              assert key in out
--        assert out.count("(default)") == 12
-+        assert out.count("(default)") == 14
+-        assert out.count("(default)") == 13
++        assert out.count("(default)") == 15
  
      def test_set_key_not_marked_default(self, temp_home, capsys):
          _run(["set", "autoswitch.cooldownSeconds", "600"], capsys)
-@@ -81,7 +83,7 @@ class TestConfigList:
+@@ -82,7 +84,7 @@ class TestConfigList:
          assert payload["schemaVersion"] == 1
          assert payload["path"].endswith("settings.json")
          by_key = {entry["key"]: entry for entry in payload["settings"]}
--        assert len(by_key) == 12
-+        assert len(by_key) == 14
-         assert by_key["run.shareHistory"]["value"] is True
+-        assert len(by_key) == 13
++        assert len(by_key) == 15
          assert by_key["autoswitch.threshold"]["value"] == 90.0
          assert by_key["autoswitch.threshold"]["isSet"] is False
+         # An unset weekly line reports null, not the threshold it falls back
 diff --git a/tests/test_desktop.py b/tests/test_desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..db7217028c6494a0a82eab6ce77c87f7eab2e4c3
+index 0000000000000000000000000000000000000000..cc6d866b1ba8ff45176275424dc88ed1ae059854
 --- /dev/null
 +++ b/tests/test_desktop.py
-@@ -0,0 +1,751 @@
+@@ -0,0 +1,878 @@
 +"""``cswap desktop``: Claude Desktop, one window per stored account.
 +
 +Claude Desktop keeps one login per profile, and Electron honors
@@ -1687,6 +1917,133 @@ index 0000000000000000000000000000000000000000..db7217028c6494a0a82eab6ce77c87f7
 +            switcher._delete_account_files("2", "account2@example.com")
 +        assert not profile.exists()
 +
++    def test_move_takes_the_profile_to_the_new_slot(self, switcher):
++        profile = desktop_dir_for(switcher.backup_dir, "2", "account2@example.com")
++        profile.mkdir(parents=True)
++        (profile / "Cookies").write_text("login of account two")
++        with patch.object(desktop, "running_pids", return_value=[]):
++            switcher.move_account("2", "5")
++        moved = desktop_dir_for(switcher.backup_dir, "5", "account2@example.com")
++        assert (moved / "Cookies").read_text() == "login of account two"
++        assert not profile.exists()
++
++    def test_swap_trades_the_profiles(self, switcher):
++        one = desktop_dir_for(switcher.backup_dir, "1", "account1@example.com")
++        two = desktop_dir_for(switcher.backup_dir, "2", "account2@example.com")
++        for profile, login in ((one, "one"), (two, "two")):
++            profile.mkdir(parents=True)
++            (profile / "Cookies").write_text(login)
++        with patch.object(desktop, "running_pids", return_value=[]):
++            switcher.swap_accounts("1", "2")
++        root = switcher.backup_dir
++        assert (
++            desktop_dir_for(root, "2", "account1@example.com") / "Cookies"
++        ).read_text() == "one"
++        assert (
++            desktop_dir_for(root, "1", "account2@example.com") / "Cookies"
++        ).read_text() == "two"
++        assert not one.exists() and not two.exists()
++
++    def test_swap_of_two_accounts_with_one_email_trades_the_profiles(
++        self, temp_home, sample_sequence_data_with_org
++    ):
++        """Both profiles are named after the same email, so the two paths
++        trade places and neither may end up holding the other's login."""
++        switcher = ClaudeAccountSwitcher()
++        switcher._setup_directories()
++        switcher._write_json(switcher.sequence_file, sample_sequence_data_with_org)
++        email = "user@example.com"
++        one = desktop_dir_for(switcher.backup_dir, "1", email)
++        two = desktop_dir_for(switcher.backup_dir, "2", email)
++        for profile, login in ((one, "org"), (two, "personal")):
++            profile.mkdir(parents=True)
++            (profile / "Cookies").write_text(login)
++        with patch.object(desktop, "running_pids", return_value=[]):
++            switcher.swap_accounts("1", "2")
++        assert (one / "Cookies").read_text() == "personal"
++        assert (two / "Cookies").read_text() == "org"
++        assert sorted(p.name for p in one.parent.iterdir()) == [one.name, two.name]
++
++    def test_swap_with_one_profile_moves_just_that_one(self, switcher):
++        one = desktop_dir_for(switcher.backup_dir, "1", "account1@example.com")
++        one.mkdir(parents=True)
++        with patch.object(desktop, "running_pids", return_value=[]):
++            switcher.swap_accounts("1", "2")
++        assert [p.name for p in one.parent.iterdir()] == ["2-account1_example.com"]
++
++    def test_move_refuses_while_the_window_is_open(self, switcher):
++        profile = desktop_dir_for(switcher.backup_dir, "2", "account2@example.com")
++        profile.mkdir(parents=True)
++        with patch.object(desktop, "running_pids", return_value=[12]):
++            with pytest.raises(SessionError, match="Claude Desktop is open .*--move-account"):
++                switcher.move_account("2", "5")
++        assert profile.exists()
++        assert "2" in switcher._get_sequence_data()["accounts"]
++
++    def test_swap_refuses_while_either_window_is_open(self, switcher):
++        profile = desktop_dir_for(switcher.backup_dir, "2", "account2@example.com")
++        profile.mkdir(parents=True)
++        with patch.object(desktop, "running_pids", return_value=[12]):
++            with pytest.raises(SessionError, match="Claude Desktop is open .*--swap-accounts"):
++                switcher.swap_accounts("1", "2")
++        assert profile.exists()
++        data = switcher._get_sequence_data()
++        assert data["accounts"]["2"]["email"] == "account2@example.com"
++
++    def test_move_refuses_a_taken_destination_and_keeps_the_profile(self, switcher):
++        """A directory already under the new name is someone's login too:
++        the move stops instead of merging into it or deleting either."""
++        profile = desktop_dir_for(switcher.backup_dir, "2", "account2@example.com")
++        profile.mkdir(parents=True)
++        (profile / "Cookies").write_text("mine")
++        taken = desktop_dir_for(switcher.backup_dir, "5", "account2@example.com")
++        taken.mkdir(parents=True)
++        with patch.object(desktop, "running_pids", return_value=[]):
++            with pytest.raises(SessionError, match="already exists. Nothing was changed"):
++                switcher.move_account("2", "5")
++        assert (profile / "Cookies").read_text() == "mine"
++        assert taken.is_dir()
++        assert "2" in switcher._get_sequence_data()["accounts"]
++        assert not list(profile.parent.glob("*.relocating"))
++
++    def test_a_failed_move_puts_the_profile_back(self, switcher):
++        profile = desktop_dir_for(switcher.backup_dir, "2", "account2@example.com")
++        profile.mkdir(parents=True)
++        (profile / "Cookies").write_text("mine")
++        with patch.object(desktop, "running_pids", return_value=[]), \
++             patch.object(switcher, "_write_json", side_effect=OSError("disk full")):
++            with pytest.raises(OSError, match="disk full"):
++                switcher.move_account("2", "5")
++        assert (profile / "Cookies").read_text() == "mine"
++        assert not desktop_dir_for(switcher.backup_dir, "5", "account2@example.com").exists()
++
++    def test_a_failed_swap_puts_both_profiles_back(self, switcher):
++        one = desktop_dir_for(switcher.backup_dir, "1", "account1@example.com")
++        two = desktop_dir_for(switcher.backup_dir, "2", "account2@example.com")
++        for profile, login in ((one, "one"), (two, "two")):
++            profile.mkdir(parents=True)
++            (profile / "Cookies").write_text(login)
++        with patch.object(desktop, "running_pids", return_value=[]), \
++             patch.object(switcher, "_write_json", side_effect=OSError("disk full")):
++            with pytest.raises(OSError, match="disk full"):
++                switcher.swap_accounts("1", "2")
++        assert (one / "Cookies").read_text() == "one"
++        assert (two / "Cookies").read_text() == "two"
++        assert sorted(p.name for p in one.parent.iterdir()) == [one.name, two.name]
++
++    def test_a_rename_that_fails_midway_is_undone(self, tmp_path):
++        """The second profile cannot take its new name: the first one, already
++        renamed, goes back, so a swap never leaves one account moved."""
++        a, b = tmp_path / "1-a", tmp_path / "2-b"
++        new_a, new_b = tmp_path / "2-a", tmp_path / "1-b"
++        a.mkdir()
++        b.mkdir()
++        new_b.mkdir()  # taken
++        with pytest.raises(SessionError, match="Could not move the Claude Desktop profile"):
++            desktop.relocate_profile_dirs([(a, new_a), (b, new_b)], "Claude Desktop")
++        assert a.is_dir() and b.is_dir() and not new_a.exists()
++        assert not list(tmp_path.glob("*.relocating"))
++
 +    def test_purge_refuses_while_a_window_is_open(self, switcher):
 +        profile = desktop_dir_for(switcher.backup_dir, "1", "account1@example.com")
 +        profile.mkdir(parents=True)
@@ -1811,7 +2168,7 @@ index 0000000000000000000000000000000000000000..db7217028c6494a0a82eab6ce77c87f7
 +        assert "desktop <num|email ...>" in out
 +        assert "desktop --quit <num|email>" in out
 diff --git a/tests/test_settings.py b/tests/test_settings.py
-index 6d30174a735d76ec267d8eb0763ff21ef150c914..f5d74ceee89bd350221bae46b4a6ea80c224b561 100644
+index 0ab957925b20ab7ea268c5c200dca6714b22d25a..24811fdbf7972a0d48dcbf29e049ff1d9ed0103c 100644
 --- a/tests/test_settings.py
 +++ b/tests/test_settings.py
 @@ -16,6 +16,7 @@ from claude_swap.settings import (
@@ -1822,9 +2179,9 @@ index 6d30174a735d76ec267d8eb0763ff21ef150c914..f5d74ceee89bd350221bae46b4a6ea80
      RunSettings,
      UiSettings,
      UpdateSettings,
-@@ -231,6 +232,9 @@ class TestSettingSpecs:
-         assert by_section["updates"] == {
-             f.name for f in UpdateSettings.__dataclass_fields__.values()
+@@ -286,6 +287,9 @@ class TestSettingSpecs:
+         assert by_section["usage"] == {
+             f.name for f in UsageSettings.__dataclass_fields__.values()
          }
 +        assert by_section["desktop"] == {
 +            f.name for f in DesktopSettings.__dataclass_fields__.values()
@@ -1832,10 +2189,10 @@ index 6d30174a735d76ec267d8eb0763ff21ef150c914..f5d74ceee89bd350221bae46b4a6ea80
  
      def test_defaults_match_dataclass(self):
          sources = {
-@@ -238,6 +242,7 @@ class TestSettingSpecs:
-             "ui": UiSettings(),
+@@ -294,6 +298,7 @@ class TestSettingSpecs:
              "run": RunSettings(),
              "updates": UpdateSettings(),
+             "usage": UsageSettings(),
 +            "desktop": DesktopSettings(),
          }
          for spec in SETTING_SPECS.values():

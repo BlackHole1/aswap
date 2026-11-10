@@ -58,14 +58,9 @@ Claude in Chrome은 `cswap switch`로 선택한 계정이 아니라 브라우저
 - `cswap config set chrome.followSwitch true`를 설정하면 `cswap switch` 시 해당 계정의 브라우저를 앞으로 가져옵니다.
 - `cswap config set chrome.appPath <path>`로 Edge나 Brave 같은 다른 Chromium 브라우저를 사용할 수 있습니다.
 
-### 대화 기록 공유
-
-`cswap run`은 기본적으로 모든 계정이 하나의 대화 기록을 공유합니다. 계정을 전환한 뒤에도 `claude --resume`으로 이전 대화를 찾을 수 있습니다([업스트림 #239](https://github.com/realiti4/claude-swap/issues/239)). 계정별로 기록을 따로 두려면 `cswap config set run.shareHistory false`를 실행하세요. Windows에서는 지원하지 않습니다.
-
 ### 버그 수정
 
 - **오래된 계정 설정.** `~/.claude.json`이 여전히 계정 B를 가리키는데 키체인에는 계정 A의 토큰이 있으면, 업스트림은 A에 다시 로그인하라고 요청하고 B의 갱신을 멈춥니다. aswap은 현재 사용 중인 토큰을 소유한 계정을 따릅니다.
-- **기록 파일 손실.** 업스트림은 프로필의 기록을 `~/.claude`로 병합할 때 이름이 같은 파일을 비교하지 않고 삭제합니다. 이 때문에 세션이나 `memory/MEMORY.md`가 사라질 수 있습니다. aswap은 내용이 다른 파일을 `history-conflicts/` 아래에 따로 보관합니다.
 - **버전과 업그레이드.** `--version`, 업데이트 확인, `upgrade`는 `claude-swap` 패키지에 하드코딩되어 있습니다. aswap은 자신이 설치된 패키지를 사용합니다.
 
 ## 빌드 방식
@@ -77,8 +72,6 @@ Claude in Chrome은 `cswap switch`로 선택한 계정이 아니라 브라우저
 | [현재 자격 증명의 소유자 따르기](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | 수정: 오래된 계정 설정  |
 | [설치된 배포 패키지 따르기](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)         | 수정: 버전과 업그레이드 |
 | [필요할 때 사용량 새로고침](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)       | 기능: `cswap refresh`   |
-| [병합 시 기록 파일 보존](../../patches/fix_set_aside_a_differing_history_file_instead_of_dropping_the_profiles_copy.patch)     | 수정: 기록 파일 손실    |
-| [하나의 대화 기록 공유](../../patches/feat_share_one_conversation_history_across_accounts_by_default.patch)                    | 기능: 대화 기록 공유    |
 | [계정별 Claude Desktop 열기](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)          | 기능: `cswap desktop`   |
 | [계정별 Chrome 열기](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                  | 기능: `cswap chrome`    |
 

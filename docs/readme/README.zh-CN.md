@@ -58,14 +58,9 @@ Claude in Chrome 使用浏览器里登录的 claude.ai 账户，而不是 `cswap
 - `cswap config set chrome.followSwitch true` 会在 `cswap switch` 时把对应账户的浏览器窗口带到前台。
 - `cswap config set chrome.appPath <path>` 可以改用其他 Chromium 内核浏览器，例如 Edge 或 Brave。
 
-### 共享会话历史
-
-`cswap run` 默认让所有账户共享同一份会话历史。切换账户后，`claude --resume` 仍能找到之前的对话 ([上游 #239](https://github.com/realiti4/claude-swap/issues/239))。如需按账户分开保存，运行 `cswap config set run.shareHistory false`。暂不支持 Windows。
-
 ### 问题修复
 
 - **账户配置过期。** 如果 `~/.claude.json` 仍指向账户 B，而钥匙串中已是账户 A 的 token，上游会要求重新登录 A，并停止刷新 B。aswap 会以实际持有当前 token 的账户为准。
-- **历史文件丢失。** 上游把 profile 的历史合并到 `~/.claude` 时，会不加比较地删除同名文件，可能导致会话或 `memory/MEMORY.md` 丢失。aswap 会把内容不同的文件另存到 `history-conflicts/`。
 - **版本与升级。** `--version`、更新检查和 `upgrade` 都写死了 `claude-swap` 包名。aswap 会使用实际安装的包。
 
 ## 构建方式
@@ -77,8 +72,6 @@ Claude in Chrome 使用浏览器里登录的 claude.ai 账户，而不是 `cswap
 | [以当前凭据的实际所有者为准](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | 修复：账户配置过期    |
 | [以实际安装的发行包为准](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)        | 修复：版本与升级      |
 | [按需刷新用量](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)                | 功能：`cswap refresh` |
-| [合并历史时保留文件](../../patches/fix_set_aside_a_differing_history_file_instead_of_dropping_the_profiles_copy.patch)     | 修复：历史文件丢失    |
-| [共享同一份会话历史](../../patches/feat_share_one_conversation_history_across_accounts_by_default.patch)                   | 功能：共享会话历史    |
 | [按账户打开 Claude Desktop](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)       | 功能：`cswap desktop` |
 | [按账户打开 Chrome](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)               | 功能：`cswap chrome`  |
 
