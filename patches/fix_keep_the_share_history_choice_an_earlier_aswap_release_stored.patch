@@ -1,0 +1,89 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kevin Cui <bh@bugs.cc>
+Date: Tue, 10 Nov 2026 01:01:56 -0500
+Subject: fix: keep the share-history choice an earlier aswap release stored
+
+Before upstream had a setting for it, aswap kept the choice between one
+shared chat history and one per account as `session.shareHistory`.
+Upstream then added `run.shareHistory` (realiti4/claude-swap#439) and, in
+1.0, turned sharing on by default: a launch that finds a profile with a
+history of its own merges it into `~/.claude` (realiti4/claude-swap#555).
+Upstream reads only its own key, so a user who chose per-account history
+under the old one is read as never having chosen. Their next `cswap run`
+moves each account's private history into the shared one, and nothing
+moves it back.
+
+`explicit_share_history` now falls back to `session.shareHistory` while
+`run.shareHistory` is absent or not a boolean. The new key wins whenever
+it is set, so `cswap config set run.shareHistory` still decides. The
+fallback answers as an explicit choice, so the Windows warning and the
+note that sharing is the default treat it as one.
+
+diff --git a/src/claude_swap/settings.py b/src/claude_swap/settings.py
+index c9048c2847db9f44d0732d299322155a840fe6d5..943d5e80ccb298c8acc2a1e6bc9d6d257874711c 100644
+--- a/src/claude_swap/settings.py
++++ b/src/claude_swap/settings.py
+@@ -414,10 +414,20 @@ def explicit_share_history(backup_root: Path) -> bool | None:
+     sharing on Windows) is dropped silently while a setting someone wrote
+     earns a warning, and only a user who never chose is told that sharing is
+     the default. A value that is not a boolean counts as never set.
++
++    ``session.shareHistory`` is where aswap kept this choice before upstream
++    had a setting for it. It still answers while ``run.shareHistory`` does
++    not, so a user who chose per-account history under the old key is not
++    read as having chosen nothing, which since sharing became the default
++    would merge every account's history into the shared one.
+     """
+-    section = _read_raw(settings_path(backup_root)).get("run")
+-    value = section.get("shareHistory") if isinstance(section, dict) else None
+-    return value if isinstance(value, bool) else None
++    raw = _read_raw(settings_path(backup_root))
++    for name in ("run", "session"):
++        section = raw.get(name)
++        value = section.get("shareHistory") if isinstance(section, dict) else None
++        if isinstance(value, bool):
++            return value
++    return None
+ 
+ 
+ def load_update_settings(backup_root: Path) -> UpdateSettings:
+diff --git a/tests/test_settings.py b/tests/test_settings.py
+index a46bb13b962018b834f580c2fbd6a108e0004f49..eccc40ffeb68c55c2480716c4c97929cafdbf3a6 100644
+--- a/tests/test_settings.py
++++ b/tests/test_settings.py
+@@ -208,6 +208,35 @@ class TestRunSettings:
+         assert explicit_share_history(tmp_path) is chosen
+         assert load_run_settings(tmp_path).share_history is chosen
+ 
++    @pytest.mark.parametrize("chosen", [True, False])
++    def test_the_key_aswap_used_before_upstream_had_one_is_still_a_choice(
++        self, tmp_path: Path, chosen
++    ):
++        """``session.shareHistory: false`` must not read as "never chose":
++        sharing is the default now, and the next launch would merge that
++        account's own history into the shared one."""
++        settings_path(tmp_path).write_text(
++            json.dumps({"session": {"shareHistory": chosen}})
++        )
++        assert explicit_share_history(tmp_path) is chosen
++        assert load_run_settings(tmp_path).share_history is chosen
++
++    def test_run_key_wins_over_the_earlier_one(self, tmp_path: Path):
++        settings_path(tmp_path).write_text(json.dumps({
++            "run": {"shareHistory": True},
++            "session": {"shareHistory": False},
++        }))
++        assert explicit_share_history(tmp_path) is True
++        set_setting(tmp_path, "run.shareHistory", "false")
++        assert explicit_share_history(tmp_path) is False
++
++    def test_an_unusable_run_value_falls_back_to_the_earlier_key(self, tmp_path: Path):
++        settings_path(tmp_path).write_text(json.dumps({
++            "run": {"shareHistory": "no"},
++            "session": {"shareHistory": False},
++        }))
++        assert load_run_settings(tmp_path).share_history is False
++
+     def test_unset_goes_back_to_the_default(self, tmp_path: Path):
+         set_setting(tmp_path, "run.shareHistory", "false")
+         assert unset_setting(tmp_path, "run.shareHistory") is True

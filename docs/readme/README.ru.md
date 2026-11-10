@@ -58,15 +58,11 @@ Claude in Chrome использует вход в claude.ai из браузер�
 - `cswap config set chrome.followSwitch true` выводит браузер аккаунта на передний план при `cswap switch`.
 - `cswap config set chrome.appPath <path>` позволяет использовать другой браузер на базе Chromium, например Edge или Brave.
 
-### Общая история диалогов
-
-`cswap run` по умолчанию ведёт одну историю диалогов для всех аккаунтов. После переключения аккаунта `claude --resume` находит прежние диалоги ([upstream #239](https://github.com/realiti4/claude-swap/issues/239)). Чтобы хранить историю отдельно для каждого аккаунта, выполните `cswap config set run.shareHistory false`. В Windows не поддерживается.
-
 ### Исправления ошибок
 
 - **Устаревшая конфигурация аккаунта.** Если `~/.claude.json` всё ещё указывает на аккаунт B, а в связке ключей лежит токен аккаунта A, upstream просит заново войти в A и перестаёт обновлять B. aswap ориентируется на аккаунт, которому принадлежит действующий токен.
-- **Потеря файлов истории.** Когда upstream переносит историю профиля в `~/.claude`, он удаляет файлы с совпадающими именами, не сравнивая их. Так можно потерять сессию или `memory/MEMORY.md`. aswap откладывает различающиеся файлы в `history-conflicts/`.
 - **Версия и обновление.** `--version`, проверка обновлений и `upgrade` жёстко привязаны к пакету `claude-swap`. aswap использует тот пакет, из которого был установлен.
+- **Прежняя настройка истории.** Ранние версии aswap сохраняли выбор отдельной истории для каждого аккаунта в `session.shareHistory`. Upstream читает только `run.shareHistory` и по умолчанию ведёт общую историю, поэтому этот выбор был бы потерян, а истории объединены. aswap по-прежнему учитывает старый ключ.
 
 ## Как это устроено
 
@@ -77,10 +73,9 @@ Claude in Chrome использует вход в claude.ai из браузер�
 | [Привязка к владельцу действующих учётных данных](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | Исправление: устаревшая конфигурация аккаунта |
 | [Привязка к установленному дистрибутиву](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)             | Исправление: версия и обновление              |
 | [Обновление расхода по запросу](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)                    | Функция: `cswap refresh`                      |
-| [Сохранение файлов истории при слиянии](../../patches/fix_set_aside_a_differing_history_file_instead_of_dropping_the_profiles_copy.patch)       | Исправление: потеря файлов истории            |
-| [Единая история диалогов](../../patches/feat_share_one_conversation_history_across_accounts_by_default.patch)                                   | Функция: общая история диалогов               |
 | [Claude Desktop для каждого аккаунта](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)                  | Функция: `cswap desktop`                      |
 | [Chrome для каждого аккаунта](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                          | Функция: `cswap chrome`                       |
+| [Сохранение прежнего выбора общей истории](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)               | Исправление: прежняя настройка истории        |
 
 Каждый патч представляет собой один коммит, а его сообщение описывает проблему в upstream. Сборка из исходников и работа с патчами описаны в [CONTRIBUTING.md](../../CONTRIBUTING.md).
 

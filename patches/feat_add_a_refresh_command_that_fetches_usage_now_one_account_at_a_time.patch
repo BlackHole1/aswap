@@ -16,17 +16,19 @@ deadline is never shown; the user can only wait.
 all) right now. UsageStore.reserve grows a `force` mode that skips the
 freshness, poll-plan and backoff gates while keeping the two that make
 a request pointless or unsafe: a dead refresh token, and another
-collector's live lease. Every account is claimed, fetched and recorded
-on its own, so a failure on one never blocks the others; a rate-limited
-account prints the server's Retry-After deadline (the local backoff
-when the server sent none) and keeps its last measurement on screen.
+collector's live lease. Every account is claimed, fetched, recorded and
+reported on its own before the next one starts, so a failure or a slow
+answer on one never holds back another; a rate-limited account prints
+the server's Retry-After deadline (the local backoff when the server
+sent none, or sent 0, which on this endpoint marks a saturated budget
+rather than "retry now") and keeps its last measurement on screen.
 Exit code 1 when any requested account could not be refreshed.
 
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index 8222a5c13aded44b031ebf84e2a58cead3d3c5e3..10585759be6493d1cc1bdc7c8d31dea89cc25f83 100644
+index b23212d65ec02a65547195b5a8e52400b5dc9fc3..4d2465e0299c7240f1751864a8def206a5ab7261 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
-@@ -380,6 +380,46 @@ def _unmap_command(argv: list[str]) -> None:
+@@ -364,6 +364,46 @@ def _unmap_command(argv: list[str]) -> None:
          sys.exit(130)
  
  
@@ -73,7 +75,7 @@ index 8222a5c13aded44b031ebf84e2a58cead3d3c5e3..10585759be6493d1cc1bdc7c8d31dea8
  def _unclaimed_command(argv: list[str]) -> None:
      """Handle `cswap unclaimed [--purge ID]` — inspect or drop a stash row.
  
-@@ -1211,6 +1251,9 @@ def main() -> None:
+@@ -1406,6 +1446,9 @@ def main() -> None:
      if argv and argv[0] == "unclaimed":
          _unclaimed_command(argv[1:])
          return
@@ -83,7 +85,7 @@ index 8222a5c13aded44b031ebf84e2a58cead3d3c5e3..10585759be6493d1cc1bdc7c8d31dea8
      if argv and argv[0] == "alias":
          _alias_command(argv[1:])
          return
-@@ -1247,6 +1290,7 @@ Commands:
+@@ -1442,6 +1485,7 @@ Commands:
    %(prog)s help                       show this help
    %(prog)s list                       list managed accounts
    %(prog)s status                     show current account
@@ -92,18 +94,10 @@ index 8222a5c13aded44b031ebf84e2a58cead3d3c5e3..10585759be6493d1cc1bdc7c8d31dea8
    %(prog)s switch <num|email>         switch to a specific account
    %(prog)s add                        add the current account
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index 2791433ca4a45a57bf384f4a700faf44a0d8fb12..cddcd39b4fd468c9d3e9adb90eee5c8beb1592f5 100644
+index e9194b9b16e6739bf7901c9e17f72e3b12a4bba3..91598993a59bf2dc6b18f65f1153d3e7c964f502 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
-@@ -81,6 +81,7 @@ from claude_swap.printer import (
-     ide_short_name,
-     muted,
-     warning,
-+    yellowed,
- )
- from claude_swap.paths import (
-     get_backup_root,
-@@ -263,6 +264,69 @@ def _usage_entry_lines(entry: UsageEntry) -> list[str]:
+@@ -312,6 +312,72 @@ def _usage_entry_lines(entry: UsageEntry) -> list[str]:
      return [dimmed(detail)]
  
  
@@ -142,9 +136,12 @@ index 2791433ca4a45a57bf384f4a700faf44a0d8fb12..cddcd39b4fd468c9d3e9adb90eee5c8b
 +        sentinel = entry.sentinel or record.sentinel or ""
 +        headline = SENTINEL_NOTES.get(sentinel, sentinel)
 +    elif record.error == "http-429":
++        # ``Retry-After: 0`` on a 429 is the endpoint's saturated-budget
++        # edge, not "retry now": the store waits its own backoff there
++        # (``_failure_backoff_s``), so that is the deadline to show.
 +        server = (
 +            _deadline_note(time.time() + record.retry_after_s)
-+            if record.retry_after_s is not None else None
++            if record.retry_after_s else None
 +        )
 +        local = (
 +            _deadline_note(entry.backoff_until)
@@ -173,7 +170,7 @@ index 2791433ca4a45a57bf384f4a700faf44a0d8fb12..cddcd39b4fd468c9d3e9adb90eee5c8b
  def _label_token_status(source: str, credentials: str) -> str | None:
      """Return ``oauth.build_token_status`` relabelled by credential source."""
      status = oauth.build_token_status(credentials)
-@@ -5498,9 +5562,17 @@ class ClaudeAccountSwitcher:
+@@ -5783,9 +5849,17 @@ class ClaudeAccountSwitcher:
          fetch: set[str] | None = None,
          *,
          scheduled: bool = False,
@@ -191,7 +188,7 @@ index 2791433ca4a45a57bf384f4a700faf44a0d8fb12..cddcd39b4fd468c9d3e9adb90eee5c8b
          ``fetch=None`` (on-demand callers: ``--list``/``--status``/switch
          strategies, dashboards) makes every account a candidate but respects
          the persisted poll plans; the auto engine passes an explicit set whose
-@@ -5574,6 +5646,7 @@ class ClaudeAccountSwitcher:
+@@ -5859,6 +5933,7 @@ class ClaudeAccountSwitcher:
                  identities,
                  respect_plans=False,
                  repair_overslept=scheduled,
@@ -199,7 +196,7 @@ index 2791433ca4a45a57bf384f4a700faf44a0d8fb12..cddcd39b4fd468c9d3e9adb90eee5c8b
              )
          # An expired ACTIVE credential that cannot reach the fetch path (and
          # its locked refresh) this tick — failure backoff, a concurrent
-@@ -5610,6 +5683,8 @@ class ClaudeAccountSwitcher:
+@@ -5895,6 +5970,8 @@ class ClaudeAccountSwitcher:
              accepted_records = {
                  num: record for num, record in records.items() if num in accepted
              }
@@ -208,7 +205,7 @@ index 2791433ca4a45a57bf384f4a700faf44a0d8fb12..cddcd39b4fd468c9d3e9adb90eee5c8b
              for num, record in accepted_records.items():
                  if record.sentinel is not None:
                      sentinels[num] = record.sentinel
-@@ -6174,6 +6249,63 @@ class ClaudeAccountSwitcher:
+@@ -6474,6 +6551,66 @@ class ClaudeAccountSwitcher:
          except Exception:
              self._logger.debug("Failed to detect running instances", exc_info=True)
  
@@ -221,8 +218,9 @@ index 2791433ca4a45a57bf384f4a700faf44a0d8fb12..cddcd39b4fd468c9d3e9adb90eee5c8b
 +        is an hour or more of "· 1h ago" with no way to ask again. This
 +        bypasses all three gates, and an ``import-usage`` hold too
 +        (``UsageStore.reserve(force=True)``), but keeps the fetches
-+        independent: every account is claimed, fetched and recorded on its
-+        own, so a 429 on one never blocks the others, and a
++        independent: every account is claimed, fetched, recorded and
++        reported on its own before the next one starts, so a 429 or a slow
++        answer on one never holds back another's result, and a
 +        rate-limited account reports the server's own ``Retry-After``
 +        deadline instead of the vaguer local backoff. Returns the exit code:
 +        1 when any requested account could not be refreshed.
@@ -247,12 +245,7 @@ index 2791433ca4a45a57bf384f4a700faf44a0d8fb12..cddcd39b4fd468c9d3e9adb90eee5c8b
 +                    selected.append(num)
 +        else:
 +            selected = list(by_num)
-+        infos = [by_num[num] for num in selected]
 +
-+        records: dict[str, FetchRecord] = {}
-+        entries = self._collect_usage_entries(
-+            infos, fetch=set(selected), force=True, records_out=records
-+        )
 +        failed = 0
 +        print(bolded("Accounts:"))
 +        for i, num in enumerate(selected):
@@ -260,7 +253,14 @@ index 2791433ca4a45a57bf384f4a700faf44a0d8fb12..cddcd39b4fd468c9d3e9adb90eee5c8b
 +            tag = self._get_display_tag(email, org_name, org_uuid)
 +            label = f"{accent(alias)} ({email})" if alias else email
 +            marker = f" {bold_accent('(active)')}" if is_active else ""
-+            print(f"  {num}: {label} {muted(f'[{tag}]')}{marker}")
++            print(f"  {num}: {label} {muted(f'[{tag}]')}{marker}", flush=True)
++            # One collector pass per account: handing it the whole selection
++            # would fetch them side by side and report nothing until the
++            # slowest one answered.
++            records: dict[str, FetchRecord] = {}
++            entries = self._collect_usage_entries(
++                [by_num[num]], fetch={num}, force=True, records_out=records
++            )
 +            lines, ok = _refresh_outcome_lines(entries[num], records.get(num))
 +            failed += 0 if ok else 1
 +            for line in lines:
@@ -273,10 +273,10 @@ index 2791433ca4a45a57bf384f4a700faf44a0d8fb12..cddcd39b4fd468c9d3e9adb90eee5c8b
          self, account_num: str, current_email: str, org_uuid: str
      ) -> UsageEntry:
 diff --git a/src/claude_swap/usage_store.py b/src/claude_swap/usage_store.py
-index 6164fe7dbcf39758bd24c7823381e43dcde2261f..70b38e2e22610cd3b233512cef587bad6c24bb8d 100644
+index 1fb28e95cff2695460d6f021d3e847ee2b983067..6a839088606c9182dff2175f6382d75ddfd91e4b 100644
 --- a/src/claude_swap/usage_store.py
 +++ b/src/claude_swap/usage_store.py
-@@ -1023,10 +1023,18 @@ class UsageStore:
+@@ -1060,10 +1060,18 @@ class UsageStore:
          *,
          respect_plans: bool,
          repair_overslept: bool = False,
@@ -295,7 +295,7 @@ index 6164fe7dbcf39758bd24c7823381e43dcde2261f..70b38e2e22610cd3b233512cef587bad
          Deciding eligibility on a lock-free :meth:`entries` read and then
          claiming separately lets two collectors both pass the check and both
          fetch; the re-check under the lock closes that window. Eligibility:
-@@ -1062,7 +1070,7 @@ class UsageStore:
+@@ -1099,7 +1107,7 @@ class UsageStore:
                  else:
                      assert isinstance(row, dict)
                      if not _row_eligible(
@@ -304,7 +304,7 @@ index 6164fe7dbcf39758bd24c7823381e43dcde2261f..70b38e2e22610cd3b233512cef587bad
                      ):
                          continue
                  claim_id = uuid.uuid4().hex
-@@ -1285,24 +1293,30 @@ def _num_or_none(value: object) -> float | None:
+@@ -1332,24 +1340,30 @@ def _num_or_none(value: object) -> float | None:
  
  
  def _row_eligible(
@@ -345,10 +345,10 @@ index 6164fe7dbcf39758bd24c7823381e43dcde2261f..70b38e2e22610cd3b233512cef587bad
      next_poll_at = _num_or_none(row.get("nextPollAt"))
 diff --git a/tests/test_refresh_command.py b/tests/test_refresh_command.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..23d41702e74d2518c7957f0399b52907684b7b88
+index 0000000000000000000000000000000000000000..cd7459979613e74287daf8c899c61c5a5f513e0b
 --- /dev/null
 +++ b/tests/test_refresh_command.py
-@@ -0,0 +1,191 @@
+@@ -0,0 +1,223 @@
 +"""``cswap refresh``: fetch usage on demand, one account at a time.
 +
 +``list`` serves a cached measurement while an account is fresh, not poll-due,
@@ -458,6 +458,38 @@ index 0000000000000000000000000000000000000000..23d41702e74d2518c7957f0399b52907
 +        }, capsys=capsys)
 +        assert "no usable Retry-After from the server; backing off until" in out
 +
++    def test_a_zero_retry_after_reports_the_local_backoff(self, switcher, capsys):
++        """``Retry-After: 0`` on a 429 is the saturated-budget edge: the store
++        backs off on its own there, so "retry now" would send the user
++        straight back into the same 429."""
++        _, out, _ = _run(switcher, {
++            "1": FetchRecord(error="http-429", retry_after_s=0.0),
++            "2": FetchRecord(usage=USAGE_2),
++        }, capsys=capsys)
++        one, _two = out.split("  2: ")
++        assert "the server allows a retry after" not in one
++        assert "no usable Retry-After from the server; backing off until" in one
++
++    def test_each_account_is_recorded_before_the_next_is_fetched(self, switcher, capsys):
++        """One at a time: by the time account 2 is asked for, account 1's
++        answer is already in the store and on screen."""
++        seen: dict[str, object] = {}
++
++        def fetch(info, rejected_fp=None):
++            if str(info[0]) == "2":
++                entries = switcher._usage_store.entries(
++                    {"1": ("account1@example.com", "")}
++                )
++                seen["first_recorded"] = entries["1"].fresh(time.time())
++                seen["first_printed"] = capsys.readouterr().out
++            return FetchRecord(usage=USAGE_1)
++
++        with patch.object(switcher, "_build_accounts_info", return_value=list(INFOS)), \
++             patch.object(switcher, "_fetch_account_usage", side_effect=fetch):
++            assert switcher.refresh_usage(None) == 0
++        assert seen["first_recorded"] is True
++        assert "40%" in seen["first_printed"]
++
 +    def test_oversized_retry_after_falls_back_to_the_local_backoff(self, switcher, capsys):
 +        """A Retry-After no clock can show must not abort the command."""
 +        code, out, _ = _run(switcher, {
@@ -541,7 +573,7 @@ index 0000000000000000000000000000000000000000..23d41702e74d2518c7957f0399b52907
 +            cli.main()
 +        assert "refresh [num|email ...]" in capsys.readouterr().out
 diff --git a/tests/test_usage_store.py b/tests/test_usage_store.py
-index 9cef7465a358b557db05293c5a490cebd8587cf8..9d494a9a55de651d1a2822f05e38be4d95724d59 100644
+index 5178a9a61d46af5e621e542c2c845612cfae925e..24a2c8aa988d79fe56210b5557307e9e4c0b3bd2 100644
 --- a/tests/test_usage_store.py
 +++ b/tests/test_usage_store.py
 @@ -1398,6 +1398,36 @@ class TestReserve:

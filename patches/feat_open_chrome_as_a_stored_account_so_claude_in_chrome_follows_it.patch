@@ -74,12 +74,18 @@ deletes the profile with the slot, and `purge` refuses while any browser
 is open and lists the profiles it removes, the same way both treat
 session and desktop profiles.
 
+`swap` and `move` take the profile along to the account's new slot
+number, the same way and under the same rules as the desktop profile:
+refused while the browser is open, and all or nothing across both apps,
+so a Chrome profile that cannot be renamed puts the desktop one back. The
+moved profile takes its new slot's window colour and keeps its name.
+
 diff --git a/src/claude_swap/chrome.py b/src/claude_swap/chrome.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..82936073c0e99ec78f3a21f444804331443f11a7
+index 0000000000000000000000000000000000000000..b195bfef3529c37df0a057ea859e0690fb9a3db6
 --- /dev/null
 +++ b/src/claude_swap/chrome.py
-@@ -0,0 +1,861 @@
+@@ -0,0 +1,891 @@
 +"""Chrome with Claude in Chrome, one browser profile per stored account.
 +
 +``cswap switch`` moves Claude Code to another account, but the Claude in
@@ -125,6 +131,7 @@ index 0000000000000000000000000000000000000000..82936073c0e99ec78f3a21f444804331
 +from claude_swap.desktop import (
 +    USER_DATA_FLAG,
 +    quit_instance,
++    relocate_profile_dirs,
 +    running_pids,
 +    stock_instance_running,
 +)
@@ -448,11 +455,14 @@ index 0000000000000000000000000000000000000000..82936073c0e99ec78f3a21f444804331
 +    return PROFILE_COLORS[index % len(PROFILE_COLORS)]
 +
 +
-+def brand_profile(profile_dir: Path, name: str, rgb: tuple[int, int, int]) -> None:
++def brand_profile(
++    profile_dir: Path, name: str | None, rgb: tuple[int, int, int]
++) -> None:
 +    """Name the profile and give its window a colour of its own, through
 +    the untracked ``Preferences`` keys Chrome reads on the next start: the
-+    avatar button shows ``name``, the frame takes the colour. Also marks the
-+    last exit clean so a cloned profile does not open with a restore bar."""
++    avatar button shows ``name`` (``None`` keeps the name it has), the frame
++    takes the colour. Also marks the last exit clean so a cloned profile
++    does not open with a restore bar."""
 +    prefs_path = profile_dir / "Preferences"
 +    try:
 +        prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
@@ -461,8 +471,9 @@ index 0000000000000000000000000000000000000000..82936073c0e99ec78f3a21f444804331
 +    except (OSError, ValueError):
 +        prefs = {}
 +    profile = prefs.setdefault("profile", {})
-+    profile["name"] = name
-+    profile["using_default_name"] = False
++    if name is not None:
++        profile["name"] = name
++        profile["using_default_name"] = False
 +    profile["exit_type"] = "Normal"
 +    profile["exited_cleanly"] = True
 +    theme = prefs.setdefault("browser", {}).setdefault("theme", {})
@@ -907,6 +918,31 @@ index 0000000000000000000000000000000000000000..82936073c0e99ec78f3a21f444804331
 +                f"('cswap chrome --quit {account_num}'), then retry {action}."
 +            )
 +
++    def relocate_profiles(self, moves: list[tuple[str, str, str]]) -> None:
++        """Take profiles along to new slot numbers, one ``(old number, new
++        number, email)`` per account that moves. Only called once
++        :meth:`ensure_closed` passed for each of them.
++
++        The window colour is picked by slot number, so each moved profile
++        takes its new slot's colour: two accounts never end up sharing one
++        when a later account lands on the number this one left. The name
++        stays, it belongs to the account."""
++        relocate_profile_dirs(
++            [
++                (self.data_dir(old, email), self.data_dir(new, email))
++                for old, new, email in moves
++            ],
++            "Chrome",
++        )
++        for _old, new, email in moves:
++            data_dir = self.data_dir(new, email)
++            if not data_dir.is_dir():
++                continue
++            try:
++                brand_profile(data_dir / "Default", None, profile_color(new))
++            except OSError:
++                pass  # the colour is a convenience; the profile has moved
++
 +    def delete_profile(self, account_num: str, email: str) -> None:
 +        """Remove the account's profile directory; the login and the
 +        extension go with it."""
@@ -942,10 +978,10 @@ index 0000000000000000000000000000000000000000..82936073c0e99ec78f3a21f444804331
 +        if sys.platform != "win32":
 +            os.chmod(path, 0o700)
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index 14e985d4be4c4cd72ecaa04b70c46ca1e7489af2..c2fe6775c11bc2120d263c7cae470744af0084cc 100644
+index cbfe081448cbd8f9730979970116862b9148fef8..971bbe07bf56f450d635c6dce0fb97ac82bffc8d 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
-@@ -503,6 +503,126 @@ Examples:
+@@ -482,6 +482,126 @@ Examples:
          sys.exit(code)
  
  
@@ -1072,7 +1108,7 @@ index 14e985d4be4c4cd72ecaa04b70c46ca1e7489af2..c2fe6775c11bc2120d263c7cae470744
  def _unclaimed_command(argv: list[str]) -> None:
      """Handle `cswap unclaimed [--purge ID]` — inspect or drop a stash row.
  
-@@ -1340,6 +1460,9 @@ def main() -> None:
+@@ -1530,6 +1650,9 @@ def main() -> None:
      if argv and argv[0] == "desktop":
          _desktop_command(argv[1:])
          return
@@ -1082,7 +1118,7 @@ index 14e985d4be4c4cd72ecaa04b70c46ca1e7489af2..c2fe6775c11bc2120d263c7cae470744
      if argv and argv[0] == "alias":
          _alias_command(argv[1:])
          return
-@@ -1395,6 +1518,11 @@ Commands:
+@@ -1585,6 +1708,11 @@ Commands:
    %(prog)s desktop --all              one Claude Desktop window per account
    %(prog)s desktop --quit <num|email> close an account's Claude Desktop window
    %(prog)s desktop                    which accounts have a window open
@@ -1094,7 +1130,7 @@ index 14e985d4be4c4cd72ecaa04b70c46ca1e7489af2..c2fe6775c11bc2120d263c7cae470744
    %(prog)s map <num|email> [path]     map a directory to an account
    %(prog)s map                        list directory mappings
    %(prog)s unmap [path]               remove a directory mapping
-@@ -1429,6 +1557,7 @@ Aliases: ls=list  rm=remove  update=upgrade""",
+@@ -1619,6 +1747,7 @@ Aliases: ls=list  rm=remove  update=upgrade""",
    %(prog)s add-token sk-ant-oat01-... --email me@example.com
    %(prog)s run 2 -- --resume                 # forward args after '--' to claude
    %(prog)s desktop 2                         # Claude Desktop signed in as account 2
@@ -1102,31 +1138,31 @@ index 14e985d4be4c4cd72ecaa04b70c46ca1e7489af2..c2fe6775c11bc2120d263c7cae470744
    %(prog)s auto --once                       # single auto-switch tick (cron-friendly)
    %(prog)s config set autoswitch.threshold 80
  
-@@ -1834,6 +1963,8 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
-             from claude_swap.menubar import run as menubar_run
- 
-             sys.exit(menubar_run(switcher))
+@@ -2107,6 +2236,8 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
+             if args.foreground or worker:
+                 sys.exit(_menubar_foreground(switcher, service_pid, worker=worker))
+             sys.exit(_menubar_start(args))
 +        if payload is not None and (args.switch or args.switch_to) and not args.json:
 +            _follow_switch(switcher, payload)
      except ClaudeSwitchError as e:
          # In JSON mode keep stdout pure JSON: emit the structured error envelope
          # there (exit 1) instead of a red stderr line.
 diff --git a/src/claude_swap/settings.py b/src/claude_swap/settings.py
-index 003767966e1e31e2712bfbef7144cdf430b98485..e03062c0515e57ba55853820f7e4d464d864d6a9 100644
+index 3beab49af85e901cdc28eeb77eec8acedecfe6ad..c9048c2847db9f44d0732d299322155a840fe6d5 100644
 --- a/src/claude_swap/settings.py
 +++ b/src/claude_swap/settings.py
 @@ -2,8 +2,8 @@
  
  One versioned JSON file for user-tunable claude-swap preferences, written
  atomically with the backup dir's 0600/0700 modes. v1 carries the
--``autoswitch``, ``ui``, ``run``, ``updates`` and ``desktop`` sections; other
--sections can be added additively.
-+``autoswitch``, ``ui``, ``run``, ``updates``, ``desktop`` and ``chrome``
-+sections; other sections can be added additively.
+-``autoswitch``, ``ui``, ``run``, ``updates``, ``usage`` and ``desktop`` sections;
+-other sections can be added additively.
++``autoswitch``, ``ui``, ``run``, ``updates``, ``usage``, ``desktop`` and
++``chrome`` sections; other sections can be added additively.
  Unknown keys (future fields, other tools' experiments) survive a round trip.
  
  Reading is forgiving — a missing or corrupt file yields defaults with a logged
-@@ -116,12 +116,32 @@ class DesktopSettings:
+@@ -132,6 +132,25 @@ class DesktopSettings:
      share_sessions: bool = True
  
  
@@ -1152,14 +1188,15 @@ index 003767966e1e31e2712bfbef7144cdf430b98485..e03062c0515e57ba55853820f7e4d464
  _SECTION_DEFAULT_SOURCES = {
      "autoswitch": AutoSwitchSettings,
      "ui": UiSettings,
-     "run": RunSettings,
+@@ -139,6 +158,7 @@ _SECTION_DEFAULT_SOURCES = {
      "updates": UpdateSettings,
+     "usage": UsageSettings,
      "desktop": DesktopSettings,
 +    "chrome": ChromeSettings,
  }
  
  
-@@ -214,6 +234,18 @@ SETTING_SPECS: dict[str, SettingSpec] = {
+@@ -235,6 +255,18 @@ SETTING_SPECS: dict[str, SettingSpec] = {
              "desktop", "shareSessions", "share_sessions", "bool",
              help="cswap desktop shares the stock profile's local sessions with every account",
          ),
@@ -1178,7 +1215,7 @@ index 003767966e1e31e2712bfbef7144cdf430b98485..e03062c0515e57ba55853820f7e4d464
      )
  }
  
-@@ -404,6 +436,33 @@ def load_desktop_settings(backup_root: Path) -> DesktopSettings:
+@@ -447,6 +479,33 @@ def load_desktop_settings(backup_root: Path) -> DesktopSettings:
      return DesktopSettings(app_path=app_path or None, share_sessions=share_sessions)
  
  
@@ -1212,19 +1249,28 @@ index 003767966e1e31e2712bfbef7144cdf430b98485..e03062c0515e57ba55853820f7e4d464
  def save_settings(backup_root: Path, settings: AutoSwitchSettings) -> None:
      """Write the autoswitch section, preserving unknown keys and sections."""
      path = settings_path(backup_root)
-@@ -578,6 +637,7 @@ def effective_settings(backup_root: Path) -> list[tuple[SettingSpec, object, boo
-         "run": load_run_settings(backup_root),
+@@ -622,6 +681,7 @@ def effective_settings(backup_root: Path) -> list[tuple[SettingSpec, object, boo
          "updates": load_update_settings(backup_root),
+         "usage": load_usage_settings(backup_root),
          "desktop": load_desktop_settings(backup_root),
 +        "chrome": load_chrome_settings(backup_root),
      }
      rows = []
      for spec in SETTING_SPECS.values():
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index c49518231c374578b54fadd99c8c20ac7791de2d..c6f24d730ad74f44bc284ec3ba8e327d6a806223 100644
+index 469bc85275d3450cb0c66d5baafbbcfe9bb5c83b..9b73785b020d8dbd20da4621774219e61ff21a29 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
-@@ -975,9 +975,12 @@ class ClaudeAccountSwitcher:
+@@ -996,7 +996,7 @@ class ClaudeAccountSwitcher:
+     def _app_profile_managers(self) -> list:
+         """Whatever keeps a per-account app profile in a directory named
+         after the slot number, which swap and move therefore take along."""
+-        return [self._desktop_manager()]
++        return [self._desktop_manager(), self._chrome_manager()]
+ 
+     def _ensure_app_profiles_closed(
+         self, account_num: str, email: str, action: str
+@@ -1057,9 +1057,12 @@ class ClaudeAccountSwitcher:
          self._ensure_no_live_session(account_num, email, "the operation")
          desktop = self._desktop_manager()
          desktop.ensure_closed(account_num, email, "the operation")
@@ -1238,7 +1284,7 @@ index c49518231c374578b54fadd99c8c20ac7791de2d..c6f24d730ad74f44bc284ec3ba8e327d
          self._delete_account_credentials(account_num, email)
          config_file = self.configs_dir / f".claude-config-{account_num}-{email}.json"
          if config_file.exists():
-@@ -990,6 +993,12 @@ class ClaudeAccountSwitcher:
+@@ -1072,6 +1075,12 @@ class ClaudeAccountSwitcher:
  
          return DesktopManager(self)
  
@@ -1251,7 +1297,7 @@ index c49518231c374578b54fadd99c8c20ac7791de2d..c6f24d730ad74f44bc284ec3ba8e327d
      def _prune_mappings(self, email: str, org_uuid: str) -> None:
          """Drop directory mappings for an identity that no longer has a slot.
  
-@@ -8078,6 +8087,23 @@ class ClaudeAccountSwitcher:
+@@ -8464,6 +8473,23 @@ class ClaudeAccountSwitcher:
              if desktop_root.is_dir()
              else []
          )
@@ -1275,8 +1321,8 @@ index c49518231c374578b54fadd99c8c20ac7791de2d..c6f24d730ad74f44bc284ec3ba8e327d
  
          warning("This will remove ALL claude-swap data from your system:")
          print(f"  - Backup directory: {self.backup_dir}")
-@@ -8096,6 +8122,8 @@ class ClaudeAccountSwitcher:
-             print("  - All session profiles and their Keychain entries")
+@@ -8503,6 +8529,8 @@ class ClaudeAccountSwitcher:
+             print(dimmed("    Copy them somewhere else first if you want them."))
          if desktop_profiles:
              print("  - All Claude Desktop profiles (each account's desktop login)")
 +        if chrome_profiles:
@@ -1284,7 +1330,7 @@ index c49518231c374578b54fadd99c8c20ac7791de2d..c6f24d730ad74f44bc284ec3ba8e327d
          print()
          print(dimmed("Note: This does NOT affect your current Claude Code login."))
          print()
-@@ -8159,6 +8187,8 @@ class ClaudeAccountSwitcher:
+@@ -8579,6 +8607,8 @@ class ClaudeAccountSwitcher:
              removed_items.append(
                  f"Claude Desktop profiles: {', '.join(desktop_profiles)}"
              )
@@ -1295,10 +1341,10 @@ index c49518231c374578b54fadd99c8c20ac7791de2d..c6f24d730ad74f44bc284ec3ba8e327d
          if self.backup_dir.exists():
 diff --git a/tests/test_chrome.py b/tests/test_chrome.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..26e34ac02e524712b8252c7bbdfb6fb80b03db47
+index 0000000000000000000000000000000000000000..af9d2915ce31ba7b6d1f1441bec2a8e62e5a018b
 --- /dev/null
 +++ b/tests/test_chrome.py
-@@ -0,0 +1,455 @@
+@@ -0,0 +1,546 @@
 +"""``cswap chrome``: Chrome with Claude in Chrome, one profile per stored account.
 +
 +The extension works as whoever is signed in to claude.ai in the browser,
@@ -1313,6 +1359,7 @@ index 0000000000000000000000000000000000000000..26e34ac02e524712b8252c7bbdfb6fb8
 +
 +from __future__ import annotations
 +
++import json
 +import re
 +import subprocess
 +import sys
@@ -1647,6 +1694,96 @@ index 0000000000000000000000000000000000000000..26e34ac02e524712b8252c7bbdfb6fb8
 +             patch.object(switcher, "_delete_account_credentials"):
 +            switcher._delete_account_files("2", "account2@example.com")
 +        assert not profile.exists()
++
++    def test_move_takes_the_profile_and_the_new_slots_colour(self, switcher):
++        profile = chrome_dir_for(switcher.backup_dir, "2", "account2@example.com")
++        (profile / "Default").mkdir(parents=True)
++        (profile / "Default" / "Cookies").write_text("login of account two")
++        chrome.brand_profile(profile / "Default", "work", chrome.profile_color("2"))
++        with patch.object(chrome, "running_pids", return_value=[]):
++            switcher.move_account("2", "5")
++        moved = chrome_dir_for(switcher.backup_dir, "5", "account2@example.com")
++        assert (moved / "Default" / "Cookies").read_text() == "login of account two"
++        assert not profile.exists()
++        prefs = json.loads((moved / "Default" / "Preferences").read_text())
++        assert prefs["profile"]["name"] == "work"
++        assert prefs["browser"]["theme"]["user_color"] == chrome._skcolor(
++            chrome.profile_color("5")
++        )
++
++    def test_swap_trades_the_profiles(self, switcher):
++        one = chrome_dir_for(switcher.backup_dir, "1", "account1@example.com")
++        two = chrome_dir_for(switcher.backup_dir, "2", "account2@example.com")
++        for profile, login in ((one, "one"), (two, "two")):
++            (profile / "Default").mkdir(parents=True)
++            (profile / "Default" / "Cookies").write_text(login)
++        with patch.object(chrome, "running_pids", return_value=[]):
++            switcher.swap_accounts("1", "2")
++        root = switcher.backup_dir
++        assert (
++            chrome_dir_for(root, "2", "account1@example.com") / "Default" / "Cookies"
++        ).read_text() == "one"
++        assert (
++            chrome_dir_for(root, "1", "account2@example.com") / "Default" / "Cookies"
++        ).read_text() == "two"
++        assert not one.exists() and not two.exists()
++
++    def test_move_refuses_while_the_browser_is_open(self, switcher):
++        profile = chrome_dir_for(switcher.backup_dir, "2", "account2@example.com")
++        profile.mkdir(parents=True)
++        with patch.object(chrome, "running_pids", return_value=[12]):
++            with pytest.raises(SessionError, match="Chrome is open .*--move-account"):
++                switcher.move_account("2", "5")
++        assert profile.exists()
++        assert "2" in switcher._get_sequence_data()["accounts"]
++
++    def test_swap_refuses_while_either_browser_is_open(self, switcher):
++        profile = chrome_dir_for(switcher.backup_dir, "2", "account2@example.com")
++        profile.mkdir(parents=True)
++        with patch.object(chrome, "running_pids", return_value=[12]):
++            with pytest.raises(SessionError, match="Chrome is open .*--swap-accounts"):
++                switcher.swap_accounts("1", "2")
++        assert profile.exists()
++        data = switcher._get_sequence_data()
++        assert data["accounts"]["2"]["email"] == "account2@example.com"
++
++    def test_a_chrome_profile_that_will_not_move_puts_the_desktop_one_back(
++        self, switcher
++    ):
++        """Desktop's profile moves first. When Chrome's then cannot, the move
++        fails as a whole, so the account is not left with one profile under
++        each number."""
++        from claude_swap.desktop import desktop_dir_for
++
++        email = "account2@example.com"
++        desktop_profile = desktop_dir_for(switcher.backup_dir, "2", email)
++        desktop_profile.mkdir(parents=True)
++        chrome_profile = chrome_dir_for(switcher.backup_dir, "2", email)
++        chrome_profile.mkdir(parents=True)
++        chrome_dir_for(switcher.backup_dir, "5", email).mkdir(parents=True)  # taken
++        with patch.object(chrome, "running_pids", return_value=[]), \
++             patch("claude_swap.desktop.running_pids", return_value=[]):
++            with pytest.raises(SessionError, match="Could not move the Chrome profile"):
++                switcher.move_account("2", "5")
++        assert desktop_profile.is_dir() and chrome_profile.is_dir()
++        assert not desktop_dir_for(switcher.backup_dir, "5", email).exists()
++        assert "2" in switcher._get_sequence_data()["accounts"]
++
++    def test_a_failed_swap_puts_both_profiles_and_their_colours_back(self, switcher):
++        one = chrome_dir_for(switcher.backup_dir, "1", "account1@example.com")
++        two = chrome_dir_for(switcher.backup_dir, "2", "account2@example.com")
++        for number, profile in (("1", one), ("2", two)):
++            chrome.brand_profile(profile / "Default", None, chrome.profile_color(number))
++        with patch.object(chrome, "running_pids", return_value=[]), \
++             patch.object(switcher, "_write_json", side_effect=OSError("disk full")):
++            with pytest.raises(OSError, match="disk full"):
++                switcher.swap_accounts("1", "2")
++        assert sorted(p.name for p in one.parent.iterdir()) == [one.name, two.name]
++        for number, profile in (("1", one), ("2", two)):
++            prefs = json.loads((profile / "Default" / "Preferences").read_text())
++            assert prefs["browser"]["theme"]["user_color"] == chrome._skcolor(
++                chrome.profile_color(number)
++            )
 +
 +    def test_purge_refuses_while_a_browser_is_open(self, switcher):
 +        profile = chrome_dir_for(switcher.backup_dir, "1", "account1@example.com")
@@ -2327,11 +2464,11 @@ index 0000000000000000000000000000000000000000..c4b8ae41a9ca5e5581219a58d6718847
 +        s = load_chrome_settings(tmp_path)
 +        assert s.clone_stock_profile is True and s.follow_switch is False
 diff --git a/tests/test_config_cli.py b/tests/test_config_cli.py
-index c82e9ea4ff191b360bed82614740a2b6afb47b7f..b59ca1789c23d1180e615e29943ec1834080b129 100644
+index 719af390f7d7b1c2495ab5a9a611708a4827aef5..9a32791567b702dffdc7b0eba39d259e19d7d60b 100644
 --- a/tests/test_config_cli.py
 +++ b/tests/test_config_cli.py
-@@ -54,9 +54,12 @@ class TestConfigList:
-             "updates.check",
+@@ -55,9 +55,12 @@ class TestConfigList:
+             "usage.headerProbe",
              "desktop.appPath",
              "desktop.shareSessions",
 +            "chrome.appPath",
@@ -2339,22 +2476,22 @@ index c82e9ea4ff191b360bed82614740a2b6afb47b7f..b59ca1789c23d1180e615e29943ec183
 +            "chrome.followSwitch",
          ):
              assert key in out
--        assert out.count("(default)") == 14
-+        assert out.count("(default)") == 17
+-        assert out.count("(default)") == 15
++        assert out.count("(default)") == 18
  
      def test_set_key_not_marked_default(self, temp_home, capsys):
          _run(["set", "autoswitch.cooldownSeconds", "600"], capsys)
-@@ -83,7 +86,7 @@ class TestConfigList:
+@@ -84,7 +87,7 @@ class TestConfigList:
          assert payload["schemaVersion"] == 1
          assert payload["path"].endswith("settings.json")
          by_key = {entry["key"]: entry for entry in payload["settings"]}
--        assert len(by_key) == 14
-+        assert len(by_key) == 17
-         assert by_key["run.shareHistory"]["value"] is True
+-        assert len(by_key) == 15
++        assert len(by_key) == 18
          assert by_key["autoswitch.threshold"]["value"] == 90.0
          assert by_key["autoswitch.threshold"]["isSet"] is False
+         # An unset weekly line reports null, not the threshold it falls back
 diff --git a/tests/test_settings.py b/tests/test_settings.py
-index f5d74ceee89bd350221bae46b4a6ea80c224b561..cf895620cfaf36303ce6708de855bd51800c4a6c 100644
+index 24811fdbf7972a0d48dcbf29e049ff1d9ed0103c..a46bb13b962018b834f580c2fbd6a108e0004f49 100644
 --- a/tests/test_settings.py
 +++ b/tests/test_settings.py
 @@ -16,6 +16,7 @@ from claude_swap.settings import (
@@ -2365,7 +2502,7 @@ index f5d74ceee89bd350221bae46b4a6ea80c224b561..cf895620cfaf36303ce6708de855bd51
      DesktopSettings,
      RunSettings,
      UiSettings,
-@@ -235,6 +236,9 @@ class TestSettingSpecs:
+@@ -290,6 +291,9 @@ class TestSettingSpecs:
          assert by_section["desktop"] == {
              f.name for f in DesktopSettings.__dataclass_fields__.values()
          }
@@ -2375,9 +2512,9 @@ index f5d74ceee89bd350221bae46b4a6ea80c224b561..cf895620cfaf36303ce6708de855bd51
  
      def test_defaults_match_dataclass(self):
          sources = {
-@@ -243,6 +247,7 @@ class TestSettingSpecs:
-             "run": RunSettings(),
+@@ -299,6 +303,7 @@ class TestSettingSpecs:
              "updates": UpdateSettings(),
+             "usage": UsageSettings(),
              "desktop": DesktopSettings(),
 +            "chrome": ChromeSettings(),
          }

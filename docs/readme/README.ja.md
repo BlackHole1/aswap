@@ -58,15 +58,11 @@ Claude in Chrome は、`cswap switch` で選んだアカウントではなく、
 - `cswap config set chrome.followSwitch true` を設定すると、`cswap switch` の際にそのアカウントのブラウザーを前面に表示します。
 - `cswap config set chrome.appPath <path>` を設定すると、Edge や Brave など別の Chromium 系ブラウザーを使えます。
 
-### 会話履歴の共有
-
-`cswap run` は、デフォルトですべてのアカウントで 1 つの会話履歴を共有します。アカウントを切り替えた後も、`claude --resume` で以前の会話を見つけられます ([上流 #239](https://github.com/realiti4/claude-swap/issues/239))。履歴をアカウントごとに分けるには、`cswap config set run.shareHistory false` を実行します。Windows には対応していません。
-
 ### バグ修正
 
 - **古いアカウント設定。** `~/.claude.json` がまだアカウント B を指しているのに、キーチェーンにはアカウント A のトークンがある場合、上流は A への再ログインを求め、B の更新を止めてしまいます。aswap は、現在有効なトークンを持つアカウントに従います。
-- **履歴ファイルの消失。** 上流はプロファイルの履歴を `~/.claude` にマージする際、同名のファイルを比較せずに削除します。そのため、セッションや `memory/MEMORY.md` が失われることがあります。aswap は内容の異なるファイルを `history-conflicts/` に退避します。
 - **バージョンとアップグレード。** `--version`、更新チェック、`upgrade` は `claude-swap` パッケージを前提にハードコードされています。aswap はインストール元のパッケージを使います。
+- **以前の履歴設定。** 以前の aswap は、履歴をアカウントごとに分ける選択を `session.shareHistory` に保存していました。上流は `run.shareHistory` しか読まず、デフォルトで履歴を共有するため、その選択が無視されて履歴が統合されてしまいます。aswap は古いキーも引き続き尊重します。
 
 ## ビルドの仕組み
 
@@ -77,10 +73,9 @@ Claude in Chrome は、`cswap switch` で選んだアカウントではなく、
 | [有効な認証情報の所有者に従う](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch)              | 修正：古いアカウント設定         |
 | [インストール元のディストリビューションに従う](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch) | 修正：バージョンとアップグレード |
 | [使用量をオンデマンドで更新](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)                 | 機能：`cswap refresh`            |
-| [マージ時に履歴ファイルを保持](../../patches/fix_set_aside_a_differing_history_file_instead_of_dropping_the_profiles_copy.patch)          | 修正：履歴ファイルの消失         |
-| [会話履歴を共有](../../patches/feat_share_one_conversation_history_across_accounts_by_default.patch)                                      | 機能：会話履歴の共有             |
 | [アカウントごとに Claude Desktop を開く](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)         | 機能：`cswap desktop`            |
 | [アカウントごとに Chrome を開く](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                 | 機能：`cswap chrome`             |
+| [以前の履歴共有の選択を保持する](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)                   | 修正：以前の履歴設定             |
 
 各パッチは 1 つのコミットで、コミットメッセージで上流の問題を説明しています。ソースからのビルドやパッチの作業については [CONTRIBUTING.md](../../CONTRIBUTING.md) を参照してください。
 

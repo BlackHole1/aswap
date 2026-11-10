@@ -58,15 +58,11 @@ Claude in Chrome 使用瀏覽器中登入的 claude.ai 帳號，而不是 `cswap
 - `cswap config set chrome.followSwitch true` 會在 `cswap switch` 時把對應帳號的瀏覽器視窗帶到前景。
 - `cswap config set chrome.appPath <path>` 可以改用其他 Chromium 核心瀏覽器，例如 Edge 或 Brave。
 
-### 共用對話紀錄
-
-`cswap run` 預設讓所有帳號共用同一份對話紀錄。切換帳號後，`claude --resume` 仍能找到先前的對話 ([上游 #239](https://github.com/realiti4/claude-swap/issues/239))。若要依帳號分開保存，執行 `cswap config set run.shareHistory false`。目前不支援 Windows。
-
 ### 問題修正
 
 - **帳號設定過期。** 若 `~/.claude.json` 仍指向帳號 B，而鑰匙圈中已是帳號 A 的 token，上游會要求重新登入 A，並停止重新整理 B。aswap 會以實際持有目前 token 的帳號為準。
-- **紀錄檔遺失。** 上游把設定檔的紀錄合併到 `~/.claude` 時，會不加比對地刪除同名檔案，可能導致工作階段或 `memory/MEMORY.md` 遺失。aswap 會把內容不同的檔案另存到 `history-conflicts/`。
 - **版本與升級。** `--version`、更新檢查和 `upgrade` 都寫死了 `claude-swap` 套件名稱。aswap 會使用實際安裝的套件。
+- **舊的紀錄設定。** 早期的 aswap 把依帳號分開保存紀錄的選擇存為 `session.shareHistory`。上游只讀取 `run.shareHistory`，而且預設共用紀錄，這個選擇會失效，各帳號的紀錄會被合併。aswap 仍會採用這個舊鍵。
 
 ## 建置方式
 
@@ -77,10 +73,9 @@ Claude in Chrome 使用瀏覽器中登入的 claude.ai 帳號，而不是 `cswap
 | [以目前憑證的實際擁有者為準](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | 修正：帳號設定過期    |
 | [以實際安裝的發行套件為準](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)      | 修正：版本與升級      |
 | [隨時重新整理用量](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)            | 功能：`cswap refresh` |
-| [合併紀錄時保留檔案](../../patches/fix_set_aside_a_differing_history_file_instead_of_dropping_the_profiles_copy.patch)     | 修正：紀錄檔遺失      |
-| [共用同一份對話紀錄](../../patches/feat_share_one_conversation_history_across_accounts_by_default.patch)                   | 功能：共用對話紀錄    |
 | [依帳號開啟 Claude Desktop](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)       | 功能：`cswap desktop` |
 | [依帳號開啟 Chrome](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)               | 功能：`cswap chrome`  |
+| [保留舊版存下的紀錄共用選擇](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)        | 修正：舊的紀錄設定    |
 
 每個修補對應一個 commit，提交訊息中說明了對應的上游問題。若要從原始碼建置或修改修補，請參閱 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
 

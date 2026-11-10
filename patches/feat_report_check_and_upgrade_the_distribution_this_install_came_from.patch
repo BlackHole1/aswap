@@ -20,11 +20,16 @@ version, and every place the update check and the self-upgrade name a
 project uses it: the PyPI project, the row picked out of `uv pip list
 --outdated` (matching `claude-swap` there would make a uv-managed aswap
 report "up to date" forever), the held-back-release notice and its
-`uv tool upgrade` lines, the after-upgrade version probe, and the
-messages. A repackaging also caches its lookup in a file of its own,
+`uv tool upgrade` lines, the after-upgrade version probe, the build
+identity the menu bar's restart-on-upgrade compares, and the messages.
+A repackaging also caches its lookup in a file of its own,
 since the cache directory is shared with an upstream install. The command shown in hints is
-`cswap` for upstream and the distribution name otherwise. Upstream installs
-behave exactly as before.
+`cswap` for upstream and the distribution name otherwise. The install
+hints for the menu bar extra name the distribution as well
+(`aswap[menubar]`): a repackaging built from upstream's metadata carries
+the same extra, and following a hint that says `claude-swap[menubar]`
+would install the other project. Upstream installs behave exactly as
+before.
 
 diff --git a/src/claude_swap/__init__.py b/src/claude_swap/__init__.py
 index 8757fd107fb185fdece5753601164e475466b0de..6b9095b5167d031365aa00da0a7b40dfd0ce026b 100644
@@ -41,12 +46,37 @@ index 8757fd107fb185fdece5753601164e475466b0de..6b9095b5167d031365aa00da0a7b40df
  
  from claude_swap.switcher import ClaudeAccountSwitcher
  
+diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
+index 0221d5eb5ecdeb01bd644cbb52bcfef5a53ab35c..b23212d65ec02a65547195b5a8e52400b5dc9fc3 100644
+--- a/src/claude_swap/cli.py
++++ b/src/claude_swap/cli.py
+@@ -1157,15 +1157,17 @@ def _menubar_extra_missing() -> str | None:
+ 
+     if importlib.util.find_spec("rumps") is not None:
+         return None
++    from claude_swap.distribution import menubar_requirement
+     from claude_swap.update_check import _detect_install_method
+ 
+     method = _detect_install_method()
++    requirement = menubar_requirement()
+     if method == "uv":
+-        remedy = "uv tool install --force 'claude-swap[menubar]'"
++        remedy = f"uv tool install --force '{requirement}'"
+     elif method == "pipx":
+-        remedy = "pipx install --force 'claude-swap[menubar]'"
++        remedy = f"pipx install --force '{requirement}'"
+     else:
+-        remedy = "pip install 'claude-swap[menubar]'"
++        remedy = f"pip install '{requirement}'"
+     return f"The menu bar needs the 'menubar' extra. Install it with: {remedy}"
+ 
+ 
 diff --git a/src/claude_swap/distribution.py b/src/claude_swap/distribution.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..325693364b45e28252029d2f15440cb7ecdc1cf1
+index 0000000000000000000000000000000000000000..9af00e281d7d7f366857db2cc71a9e97013102ab
 --- /dev/null
 +++ b/src/claude_swap/distribution.py
-@@ -0,0 +1,42 @@
+@@ -0,0 +1,50 @@
 +"""Which distribution this code was installed from.
 +
 +Upstream ships as ``claude-swap`` (commands ``cswap`` and ``claude-swap``).
@@ -89,8 +119,54 @@ index 0000000000000000000000000000000000000000..325693364b45e28252029d2f15440cb7
 +    the distribution name for a repackaging (``aswap``)."""
 +    name = distribution_name()
 +    return UPSTREAM_COMMAND if name == UPSTREAM_DISTRIBUTION else name
++
++
++def menubar_requirement() -> str:
++    """What to hand an installer to get the menu bar: the distribution this
++    install came from, with its ``menubar`` extra. A repackaging built from
++    upstream's metadata carries the same extra, and telling its user to
++    install ``claude-swap[menubar]`` would put the other project in place."""
++    return f"{distribution_name()}[menubar]"
+diff --git a/src/claude_swap/menubar.py b/src/claude_swap/menubar.py
+index 5364c7fae7254657a56df70ef48af23c6c982a4a..a5f7fb2557b5e9c4f204ac25249f7e3565a08c10 100644
+--- a/src/claude_swap/menubar.py
++++ b/src/claude_swap/menubar.py
+@@ -681,15 +681,18 @@ def framework_build_warning(
+ 
+         install_method = _detect_install_method()
+ 
++    from claude_swap.distribution import menubar_requirement
++
++    requirement = menubar_requirement()
+     if install_method == "uv":
+         remedy = (
+-            "  uv tool install --managed-python --force 'claude-swap[menubar]'"
++            f"  uv tool install --managed-python --force '{requirement}'"
+         )
+     elif install_method == "pipx":
+         remedy = (
+             "  Reinstall against a non-framework interpreter, e.g. one from "
+             "`uv python install 3.13`:\n"
+-            "  pipx install --force --python <that python> 'claude-swap[menubar]'"
++            f"  pipx install --force --python <that python> '{requirement}'"
+         )
+     else:
+         remedy = (
+@@ -714,9 +717,11 @@ def run(switcher) -> int:
+         # guard around ``from claude_swap.menubar import run`` can never see a
+         # missing extra — the failure lands here at call time. Raise the
+         # error type the CLI already renders cleanly instead of a traceback.
++        from claude_swap.distribution import menubar_requirement
++
+         raise ClaudeSwitchError(
+             "Menu bar mode requires 'rumps'. "
+-            "Install with: pip install 'claude-swap[menubar]'"
++            f"Install with: pip install '{menubar_requirement()}'"
+         ) from e
+ 
+     from claude_swap import app_bundle
 diff --git a/src/claude_swap/update_check.py b/src/claude_swap/update_check.py
-index 5f8d5ab34c72fcbe37d8b160b2c9762387885717..96b91f7cc4de965b232b9e0032f89b0b7c4e116c 100644
+index d66ee37f7e3ebae0c947d93cae0ac4e32ce7eba2..9027e35c475162dd18d8c838f05a607a1fb5d2b7 100644
 --- a/src/claude_swap/update_check.py
 +++ b/src/claude_swap/update_check.py
 @@ -1,4 +1,5 @@
@@ -247,8 +323,17 @@ index 5f8d5ab34c72fcbe37d8b160b2c9762387885717..96b91f7cc4de965b232b9e0032f89b0b
      )
      try:
          result = subprocess.run(
-@@ -356,9 +380,10 @@ def run_self_upgrade(current_version: str | None = None) -> int:
-     before = current_version
+@@ -351,7 +375,7 @@ def install_identity() -> dict:
+ 
+     source = None
+     try:
+-        raw = metadata.distribution("claude-swap").read_text("direct_url.json")
++        raw = metadata.distribution(distribution_name()).read_text("direct_url.json")
+         if raw:
+             source = (json.loads(raw).get("vcs_info") or {}).get("commit_id") or None
+     except (OSError, ImportError, ValueError, AttributeError, TypeError):
+@@ -443,9 +467,10 @@ def run_self_upgrade(current_version: str | None = None) -> int:
+     before_identity = install_identity()
  
      method = _detect_install_method()
 +    dist = distribution_name()
@@ -260,7 +345,7 @@ index 5f8d5ab34c72fcbe37d8b160b2c9762387885717..96b91f7cc4de965b232b9e0032f89b0b
      }
      cmd = commands.get(method or "")
      if cmd is None:
-@@ -367,9 +392,9 @@ def run_self_upgrade(current_version: str | None = None) -> int:
+@@ -454,9 +479,9 @@ def run_self_upgrade(current_version: str | None = None) -> int:
              f"  sys.prefix:     {sys.prefix}\n"
              f"  sys.executable: {sys.executable}\n"
              "To upgrade manually, run one of:\n"
@@ -273,7 +358,7 @@ index 5f8d5ab34c72fcbe37d8b160b2c9762387885717..96b91f7cc4de965b232b9e0032f89b0b
              "If you installed with `pip install -e .`, use `git pull` instead."
          )
          return 1
-@@ -379,7 +404,7 @@ def run_self_upgrade(current_version: str | None = None) -> int:
+@@ -466,7 +491,7 @@ def run_self_upgrade(current_version: str | None = None) -> int:
      # though the package itself updates. cswap exits right after this, which
      # releases the lock, so the user can just run the command themselves.
      if sys.platform == "win32":
@@ -282,7 +367,7 @@ index 5f8d5ab34c72fcbe37d8b160b2c9762387885717..96b91f7cc4de965b232b9e0032f89b0b
          if method == "uv":
              notice = held_back_release_notice(current_version)
              if notice:
-@@ -406,9 +431,9 @@ def run_self_upgrade(current_version: str | None = None) -> int:
+@@ -493,9 +518,9 @@ def run_self_upgrade(current_version: str | None = None) -> int:
      # never masking the upgrade's own exit status.
      after = _installed_version_on_disk()
      if before and after and after != before:
@@ -292,14 +377,14 @@ index 5f8d5ab34c72fcbe37d8b160b2c9762387885717..96b91f7cc4de965b232b9e0032f89b0b
 -        print(f"claude-swap is still at {after}.")
 +        print(f"{dist} is still at {after}.")
  
-     if method == "uv":
-         notice = held_back_release_notice(current_version)
+     if sys.platform == "darwin":
+         _restart_menubar_if_rebuilt(before_identity)
 diff --git a/tests/test_distribution.py b/tests/test_distribution.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..41ab0c68c5c2c850bf748c787988ffd37823b2d0
+index 0000000000000000000000000000000000000000..ea79c7c2851a7e83872de2315fcd2d2b2018c139
 --- /dev/null
 +++ b/tests/test_distribution.py
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,197 @@
 +"""The code reports, checks, and upgrades the distribution it was installed
 +from: upstream ``claude-swap`` or a repackaging such as ``aswap``."""
 +
@@ -417,3 +502,83 @@ index 0000000000000000000000000000000000000000..41ab0c68c5c2c850bf748c787988ffd3
 +        probe = run.call_args_list[1][0][0]
 +        assert "m.version('aswap')" in probe[-1]
 +        assert any("aswap upgraded: 0.1.0 -> 0.2.0" in str(c) for c in printed.call_args_list)
++
++    def test_build_identity_reads_the_distributions_metadata(self, monkeypatch, tmp_path):
++        """The commit a git install was built from is recorded in the
++        distribution's own ``direct_url.json``, not in claude-swap's."""
++        self._as_aswap(monkeypatch, tmp_path)
++        asked = []
++
++        class _Dist:
++            def read_text(self, name):
++                return json.dumps({"vcs_info": {"commit_id": "abc1234def"}})
++
++        def distribution(name):
++            asked.append(name)
++            return _Dist()
++
++        with patch("importlib.metadata.distribution", side_effect=distribution):
++            identity = update_check.install_identity()
++        assert asked == ["aswap"]
++        assert identity["source"] == "abc1234def"
++
++
++class TestMenubarExtraHints:
++    """Every hint that tells the user how to get the menu bar names the
++    distribution this install came from: following one that says
++    ``claude-swap[menubar]`` from an aswap install would install upstream."""
++
++    def _installed_as(self, monkeypatch, name):
++        monkeypatch.setattr(
++            distribution, "packages_distributions", lambda: {"claude_swap": [name]}
++        )
++
++    def test_requirement_names_the_distribution(self, monkeypatch):
++        self._installed_as(monkeypatch, "aswap")
++        assert distribution.menubar_requirement() == "aswap[menubar]"
++        self._installed_as(monkeypatch, "claude-swap")
++        assert distribution.menubar_requirement() == "claude-swap[menubar]"
++
++    def test_missing_extra_hint(self, monkeypatch):
++        import importlib.util
++
++        from claude_swap import cli
++
++        monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)
++        for method, command in (
++            ("uv", "uv tool install --force"),
++            ("pipx", "pipx install --force"),
++            (None, "pip install"),
++        ):
++            monkeypatch.setattr(update_check, "_detect_install_method", lambda m=method: m)
++            self._installed_as(monkeypatch, "aswap")
++            hint = cli._menubar_extra_missing()
++            assert f"{command} 'aswap[menubar]'" in hint
++            assert "claude-swap" not in hint
++            self._installed_as(monkeypatch, "claude-swap")
++            assert f"{command} 'claude-swap[menubar]'" in cli._menubar_extra_missing()
++
++    def test_framework_build_remedy(self, monkeypatch):
++        from claude_swap import menubar
++
++        self._installed_as(monkeypatch, "aswap")
++        for method in ("uv", "pipx"):
++            remedy = menubar.framework_build_warning("Python", method, "26.6.2")
++            assert "'aswap[menubar]'" in remedy
++            assert "claude-swap" not in remedy
++        self._installed_as(monkeypatch, "claude-swap")
++        remedy = menubar.framework_build_warning("Python", "uv", "26.6.2")
++        assert "'claude-swap[menubar]'" in remedy
++
++    def test_run_without_rumps(self, monkeypatch):
++        import sys
++
++        import pytest
++
++        from claude_swap import menubar
++        from claude_swap.exceptions import ClaudeSwitchError
++
++        monkeypatch.setitem(sys.modules, "rumps", None)
++        self._installed_as(monkeypatch, "aswap")
++        with pytest.raises(ClaudeSwitchError, match=r"pip install 'aswap\[menubar\]'"):
++            menubar.run(switcher=None)
