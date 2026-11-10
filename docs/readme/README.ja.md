@@ -62,6 +62,7 @@ Claude in Chrome は、`cswap switch` で選んだアカウントではなく、
 
 - **古いアカウント設定。** `~/.claude.json` がまだアカウント B を指しているのに、キーチェーンにはアカウント A のトークンがある場合、上流は A への再ログインを求め、B の更新を止めてしまいます。aswap は、現在有効なトークンを持つアカウントに従います。
 - **バージョンとアップグレード。** `--version`、更新チェック、`upgrade` は `claude-swap` パッケージを前提にハードコードされています。aswap はインストール元のパッケージを使います。
+- **以前の履歴設定。** 以前の aswap は、履歴をアカウントごとに分ける選択を `session.shareHistory` に保存していました。上流は `run.shareHistory` しか読まず、デフォルトで履歴を共有するため、その選択が無視されて履歴が統合されてしまいます。aswap は古いキーも引き続き尊重します。
 
 ## ビルドの仕組み
 
@@ -74,6 +75,7 @@ Claude in Chrome は、`cswap switch` で選んだアカウントではなく、
 | [使用量をオンデマンドで更新](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)                 | 機能：`cswap refresh`            |
 | [アカウントごとに Claude Desktop を開く](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)         | 機能：`cswap desktop`            |
 | [アカウントごとに Chrome を開く](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                 | 機能：`cswap chrome`             |
+| [以前の履歴共有の選択を保持する](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)                   | 修正：以前の履歴設定             |
 
 各パッチは 1 つのコミットで、コミットメッセージで上流の問題を説明しています。ソースからのビルドやパッチの作業については [CONTRIBUTING.md](../../CONTRIBUTING.md) を参照してください。
 

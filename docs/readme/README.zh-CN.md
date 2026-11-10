@@ -62,6 +62,7 @@ Claude in Chrome 使用浏览器里登录的 claude.ai 账户，而不是 `cswap
 
 - **账户配置过期。** 如果 `~/.claude.json` 仍指向账户 B，而钥匙串中已是账户 A 的 token，上游会要求重新登录 A，并停止刷新 B。aswap 会以实际持有当前 token 的账户为准。
 - **版本与升级。** `--version`、更新检查和 `upgrade` 都写死了 `claude-swap` 包名。aswap 会使用实际安装的包。
+- **旧的历史设置。** 早期的 aswap 把按账户分开保存历史的选择存为 `session.shareHistory`。上游只读取 `run.shareHistory`，并且默认共享历史，这个选择会失效，各账户的历史会被合并。aswap 仍然认这个旧键。
 
 ## 构建方式
 
@@ -74,6 +75,7 @@ Claude in Chrome 使用浏览器里登录的 claude.ai 账户，而不是 `cswap
 | [按需刷新用量](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)                | 功能：`cswap refresh` |
 | [按账户打开 Claude Desktop](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)       | 功能：`cswap desktop` |
 | [按账户打开 Chrome](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)               | 功能：`cswap chrome`  |
+| [保留旧版存下的历史共享选择](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)        | 修复：旧的历史设置    |
 
 每个补丁对应一个 commit，提交信息中说明了对应的上游问题。如需从源码构建或修改补丁，请参阅 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
 

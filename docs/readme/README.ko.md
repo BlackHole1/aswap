@@ -62,6 +62,7 @@ Claude in Chrome은 `cswap switch`로 선택한 계정이 아니라 브라우저
 
 - **오래된 계정 설정.** `~/.claude.json`이 여전히 계정 B를 가리키는데 키체인에는 계정 A의 토큰이 있으면, 업스트림은 A에 다시 로그인하라고 요청하고 B의 갱신을 멈춥니다. aswap은 현재 사용 중인 토큰을 소유한 계정을 따릅니다.
 - **버전과 업그레이드.** `--version`, 업데이트 확인, `upgrade`는 `claude-swap` 패키지에 하드코딩되어 있습니다. aswap은 자신이 설치된 패키지를 사용합니다.
+- **이전 기록 설정.** 이전 aswap 릴리스는 계정별로 기록을 따로 두는 선택을 `session.shareHistory`에 저장했습니다. 업스트림은 `run.shareHistory`만 읽고 기본적으로 기록을 공유하므로, 이 선택이 무시되어 기록이 합쳐집니다. aswap은 이전 키도 계속 따릅니다.
 
 ## 빌드 방식
 
@@ -74,6 +75,7 @@ Claude in Chrome은 `cswap switch`로 선택한 계정이 아니라 브라우저
 | [필요할 때 사용량 새로고침](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)       | 기능: `cswap refresh`   |
 | [계정별 Claude Desktop 열기](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)          | 기능: `cswap desktop`   |
 | [계정별 Chrome 열기](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                  | 기능: `cswap chrome`    |
+| [이전 기록 공유 선택 유지하기](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)          | 수정: 이전 기록 설정    |
 
 각 패치는 단일 커밋이며, 커밋 메시지에 업스트림의 문제가 설명되어 있습니다. 소스에서 빌드하거나 패치 작업을 하려면 [CONTRIBUTING.md](../../CONTRIBUTING.md)를 참고하세요.
 

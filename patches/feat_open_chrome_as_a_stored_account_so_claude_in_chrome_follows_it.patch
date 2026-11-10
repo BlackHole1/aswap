@@ -1258,10 +1258,10 @@ index 3beab49af85e901cdc28eeb77eec8acedecfe6ad..c9048c2847db9f44d0732d299322155a
      rows = []
      for spec in SETTING_SPECS.values():
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index d109912957c6f9c58c552c359121167903ecc78c..3557a64664114b0fc82389237497c47384884a44 100644
+index 469bc85275d3450cb0c66d5baafbbcfe9bb5c83b..9b73785b020d8dbd20da4621774219e61ff21a29 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
-@@ -993,7 +993,7 @@ class ClaudeAccountSwitcher:
+@@ -996,7 +996,7 @@ class ClaudeAccountSwitcher:
      def _app_profile_managers(self) -> list:
          """Whatever keeps a per-account app profile in a directory named
          after the slot number, which swap and move therefore take along."""
@@ -1270,7 +1270,7 @@ index d109912957c6f9c58c552c359121167903ecc78c..3557a64664114b0fc82389237497c473
  
      def _ensure_app_profiles_closed(
          self, account_num: str, email: str, action: str
-@@ -1054,9 +1054,12 @@ class ClaudeAccountSwitcher:
+@@ -1057,9 +1057,12 @@ class ClaudeAccountSwitcher:
          self._ensure_no_live_session(account_num, email, "the operation")
          desktop = self._desktop_manager()
          desktop.ensure_closed(account_num, email, "the operation")
@@ -1284,7 +1284,7 @@ index d109912957c6f9c58c552c359121167903ecc78c..3557a64664114b0fc82389237497c473
          self._delete_account_credentials(account_num, email)
          config_file = self.configs_dir / f".claude-config-{account_num}-{email}.json"
          if config_file.exists():
-@@ -1069,6 +1072,12 @@ class ClaudeAccountSwitcher:
+@@ -1072,6 +1075,12 @@ class ClaudeAccountSwitcher:
  
          return DesktopManager(self)
  
@@ -1297,7 +1297,7 @@ index d109912957c6f9c58c552c359121167903ecc78c..3557a64664114b0fc82389237497c473
      def _prune_mappings(self, email: str, org_uuid: str) -> None:
          """Drop directory mappings for an identity that no longer has a slot.
  
-@@ -8458,6 +8467,23 @@ class ClaudeAccountSwitcher:
+@@ -8464,6 +8473,23 @@ class ClaudeAccountSwitcher:
              if desktop_root.is_dir()
              else []
          )
@@ -1321,7 +1321,7 @@ index d109912957c6f9c58c552c359121167903ecc78c..3557a64664114b0fc82389237497c473
  
          warning("This will remove ALL claude-swap data from your system:")
          print(f"  - Backup directory: {self.backup_dir}")
-@@ -8497,6 +8523,8 @@ class ClaudeAccountSwitcher:
+@@ -8503,6 +8529,8 @@ class ClaudeAccountSwitcher:
              print(dimmed("    Copy them somewhere else first if you want them."))
          if desktop_profiles:
              print("  - All Claude Desktop profiles (each account's desktop login)")
@@ -1330,7 +1330,7 @@ index d109912957c6f9c58c552c359121167903ecc78c..3557a64664114b0fc82389237497c473
          print()
          print(dimmed("Note: This does NOT affect your current Claude Code login."))
          print()
-@@ -8573,6 +8601,8 @@ class ClaudeAccountSwitcher:
+@@ -8579,6 +8607,8 @@ class ClaudeAccountSwitcher:
              removed_items.append(
                  f"Claude Desktop profiles: {', '.join(desktop_profiles)}"
              )

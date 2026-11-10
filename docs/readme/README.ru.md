@@ -62,6 +62,7 @@ Claude in Chrome использует вход в claude.ai из браузер�
 
 - **Устаревшая конфигурация аккаунта.** Если `~/.claude.json` всё ещё указывает на аккаунт B, а в связке ключей лежит токен аккаунта A, upstream просит заново войти в A и перестаёт обновлять B. aswap ориентируется на аккаунт, которому принадлежит действующий токен.
 - **Версия и обновление.** `--version`, проверка обновлений и `upgrade` жёстко привязаны к пакету `claude-swap`. aswap использует тот пакет, из которого был установлен.
+- **Прежняя настройка истории.** Ранние версии aswap сохраняли выбор отдельной истории для каждого аккаунта в `session.shareHistory`. Upstream читает только `run.shareHistory` и по умолчанию ведёт общую историю, поэтому этот выбор был бы потерян, а истории объединены. aswap по-прежнему учитывает старый ключ.
 
 ## Как это устроено
 
@@ -74,6 +75,7 @@ Claude in Chrome использует вход в claude.ai из браузер�
 | [Обновление расхода по запросу](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)                    | Функция: `cswap refresh`                      |
 | [Claude Desktop для каждого аккаунта](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)                  | Функция: `cswap desktop`                      |
 | [Chrome для каждого аккаунта](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                          | Функция: `cswap chrome`                       |
+| [Сохранение прежнего выбора общей истории](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)               | Исправление: прежняя настройка истории        |
 
 Каждый патч представляет собой один коммит, а его сообщение описывает проблему в upstream. Сборка из исходников и работа с патчами описаны в [CONTRIBUTING.md](../../CONTRIBUTING.md).
 

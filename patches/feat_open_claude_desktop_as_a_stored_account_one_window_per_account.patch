@@ -1062,10 +1062,10 @@ index ef3a6f0b281f0b62738e7439064b9fbac8bb7fea..3beab49af85e901cdc28eeb77eec8ace
      rows = []
      for spec in SETTING_SPECS.values():
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index 9afbf6708bb21019312826924b648287251ec89b..d109912957c6f9c58c552c359121167903ecc78c 100644
+index 91598993a59bf2dc6b18f65f1153d3e7c964f502..469bc85275d3450cb0c66d5baafbbcfe9bb5c83b 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
-@@ -990,6 +990,55 @@ class ClaudeAccountSwitcher:
+@@ -993,6 +993,55 @@ class ClaudeAccountSwitcher:
          """Pre-commit clear that raises when the key still reads non-empty."""
          self._store.delete_account_credentials_strict(account_num, email)
  
@@ -1121,7 +1121,7 @@ index 9afbf6708bb21019312826924b648287251ec89b..d109912957c6f9c58c552c3591211679
      def _delete_account_files(self, account_num: str, email: str) -> None:
          """Delete all backup files for an account (credentials + config).
  
-@@ -1003,12 +1052,23 @@ class ClaudeAccountSwitcher:
+@@ -1006,12 +1055,23 @@ class ClaudeAccountSwitcher:
              SessionError: a live session-mode instance is using this account.
          """
          self._ensure_no_live_session(account_num, email, "the operation")
@@ -1145,7 +1145,7 @@ index 9afbf6708bb21019312826924b648287251ec89b..d109912957c6f9c58c552c3591211679
      def _prune_mappings(self, email: str, org_uuid: str) -> None:
          """Drop directory mappings for an identity that no longer has a slot.
  
-@@ -1253,6 +1313,8 @@ class ClaudeAccountSwitcher:
+@@ -1256,6 +1316,8 @@ class ClaudeAccountSwitcher:
          # under a running process.
          self._ensure_no_live_session(num_a, email_a, "--swap-accounts")
          self._ensure_no_live_session(num_b, email_b, "--swap-accounts")
@@ -1154,7 +1154,7 @@ index 9afbf6708bb21019312826924b648287251ec89b..d109912957c6f9c58c552c3591211679
  
          # A profile that rotated past its backup advances the backup first:
          # the backup is what moves, and the profile's Keychain item is deleted
-@@ -1274,6 +1336,8 @@ class ClaudeAccountSwitcher:
+@@ -1277,6 +1339,8 @@ class ClaudeAccountSwitcher:
          config_b = self._read_account_config(num_b, email_b)
  
          staging: dict[str, Path] = {}
@@ -1163,7 +1163,7 @@ index 9afbf6708bb21019312826924b648287251ec89b..d109912957c6f9c58c552c3591211679
          try:
              if email_a == email_b:
                  # Same email: the two slots' backup keys fully overlap, so
-@@ -1289,6 +1353,7 @@ class ClaudeAccountSwitcher:
+@@ -1292,6 +1356,7 @@ class ClaudeAccountSwitcher:
              # accounts share an email the two paths swap directly, so stage the
              # first through a temporary name.
              self._swap_session_dirs(num_a, email_a, num_b, email_b)
@@ -1171,7 +1171,7 @@ index 9afbf6708bb21019312826924b648287251ec89b..d109912957c6f9c58c552c3591211679
  
              # Set each destination key to its owner's exact state: write
              # material that exists, actively clear what doesn't. An empty
-@@ -1333,6 +1398,7 @@ class ClaudeAccountSwitcher:
+@@ -1336,6 +1401,7 @@ class ClaudeAccountSwitcher:
              # The commit point: _write_json's rename publishes the swap.
              self._write_json(self.sequence_file, data)
          except BaseException:
@@ -1179,7 +1179,7 @@ index 9afbf6708bb21019312826924b648287251ec89b..d109912957c6f9c58c552c3591211679
              self._rollback_swap(
                  num_a, email_a, creds_a, config_a,
                  num_b, email_b, creds_b, config_b,
-@@ -1712,6 +1778,7 @@ class ClaudeAccountSwitcher:
+@@ -1715,6 +1781,7 @@ class ClaudeAccountSwitcher:
          # Relocating backups/session under a live session-mode claude would
          # pull state out from under a running process.
          self._ensure_no_live_session(num_src, email, "--move-account")
@@ -1187,7 +1187,7 @@ index 9afbf6708bb21019312826924b648287251ec89b..d109912957c6f9c58c552c3591211679
  
          # Same as swap: the backup is what moves, and the profile's Keychain
          # item is deleted with the old slot key, so a profile that rotated
-@@ -1729,6 +1796,8 @@ class ClaudeAccountSwitcher:
+@@ -1732,6 +1799,8 @@ class ClaudeAccountSwitcher:
  
          src_dir = self._session_dir(num_src, email)
          dst_dir = self._session_dir(target, email)
@@ -1196,7 +1196,7 @@ index 9afbf6708bb21019312826924b648287251ec89b..d109912957c6f9c58c552c3591211679
          try:
              # Move the session profile to the account's new slot key, best
              # effort: a profile that cannot be moved is pruned below with the
-@@ -1742,6 +1811,7 @@ class ClaudeAccountSwitcher:
+@@ -1745,6 +1814,7 @@ class ClaudeAccountSwitcher:
                      self._logger.warning(
                          f"Session profile move skipped during move: {e}"
                      )
@@ -1204,7 +1204,7 @@ index 9afbf6708bb21019312826924b648287251ec89b..d109912957c6f9c58c552c3591211679
  
              # Set the target key to the account's exact state: write material
              # that exists, actively clear what doesn't — an unbacked account
-@@ -1776,6 +1846,7 @@ class ClaudeAccountSwitcher:
+@@ -1779,6 +1849,7 @@ class ClaudeAccountSwitcher:
              # Pre-commit failure: the records still point at num_src and its
              # keys are untouched — drop any strays written under the target
              # key and put the session profile back, best effort.
@@ -1212,7 +1212,7 @@ index 9afbf6708bb21019312826924b648287251ec89b..d109912957c6f9c58c552c3591211679
              try:
                  self._delete_account_credentials(target, email)
                  self._delete_config_backup(target, email)
-@@ -8369,6 +8440,24 @@ class ClaudeAccountSwitcher:
+@@ -8375,6 +8446,24 @@ class ClaudeAccountSwitcher:
                  "would pull a live profile out from under it. Repair or remove "
                  "them, then retry --purge."
              )
@@ -1237,7 +1237,7 @@ index 9afbf6708bb21019312826924b648287251ec89b..d109912957c6f9c58c552c3591211679
  
          warning("This will remove ALL claude-swap data from your system:")
          print(f"  - Backup directory: {self.backup_dir}")
-@@ -8406,6 +8495,8 @@ class ClaudeAccountSwitcher:
+@@ -8412,6 +8501,8 @@ class ClaudeAccountSwitcher:
                  )
              )
              print(dimmed("    Copy them somewhere else first if you want them."))
@@ -1246,7 +1246,7 @@ index 9afbf6708bb21019312826924b648287251ec89b..d109912957c6f9c58c552c3591211679
          print()
          print(dimmed("Note: This does NOT affect your current Claude Code login."))
          print()
-@@ -8478,6 +8569,10 @@ class ClaudeAccountSwitcher:
+@@ -8484,6 +8575,10 @@ class ClaudeAccountSwitcher:
              removed_items.append(
                  f"Session profiles: {', '.join(d.name for d in session_dirs)}"
              )

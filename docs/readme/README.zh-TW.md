@@ -62,6 +62,7 @@ Claude in Chrome 使用瀏覽器中登入的 claude.ai 帳號，而不是 `cswap
 
 - **帳號設定過期。** 若 `~/.claude.json` 仍指向帳號 B，而鑰匙圈中已是帳號 A 的 token，上游會要求重新登入 A，並停止重新整理 B。aswap 會以實際持有目前 token 的帳號為準。
 - **版本與升級。** `--version`、更新檢查和 `upgrade` 都寫死了 `claude-swap` 套件名稱。aswap 會使用實際安裝的套件。
+- **舊的紀錄設定。** 早期的 aswap 把依帳號分開保存紀錄的選擇存為 `session.shareHistory`。上游只讀取 `run.shareHistory`，而且預設共用紀錄，這個選擇會失效，各帳號的紀錄會被合併。aswap 仍會採用這個舊鍵。
 
 ## 建置方式
 
@@ -74,6 +75,7 @@ Claude in Chrome 使用瀏覽器中登入的 claude.ai 帳號，而不是 `cswap
 | [隨時重新整理用量](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)            | 功能：`cswap refresh` |
 | [依帳號開啟 Claude Desktop](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)       | 功能：`cswap desktop` |
 | [依帳號開啟 Chrome](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)               | 功能：`cswap chrome`  |
+| [保留舊版存下的紀錄共用選擇](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)        | 修正：舊的紀錄設定    |
 
 每個修補對應一個 commit，提交訊息中說明了對應的上游問題。若要從原始碼建置或修改修補，請參閱 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
 

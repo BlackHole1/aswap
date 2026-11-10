@@ -62,6 +62,7 @@ Claude in Chrome utilise la connexion claude.ai du navigateur, et non le compte 
 
 - **Configuration de compte obsolète.** Si `~/.claude.json` désigne encore le compte B alors que le trousseau contient le jeton du compte A, la version amont redemande une connexion au compte A et cesse d'actualiser le compte B. aswap suit le compte auquel appartient le jeton actif.
 - **Version et mise à jour.** `--version`, la vérification des mises à jour et `upgrade` sont codés en dur sur le paquet `claude-swap`. aswap utilise le paquet à partir duquel il a été installé.
+- **Ancien réglage de l'historique.** Les anciennes versions d'aswap enregistraient le choix d'un historique par compte dans `session.shareHistory`. La version amont ne lit que `run.shareHistory` et partage l'historique par défaut. Ce choix serait donc perdu et les historiques fusionnés. aswap respecte toujours l'ancienne clé.
 
 ## Construction
 
@@ -74,6 +75,7 @@ Claude in Chrome utilise la connexion claude.ai du navigateur, et non le compte 
 | [Actualiser la consommation à la demande](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)        | Fonctionnalité : `cswap refresh`             |
 | [Ouvrir Claude Desktop par compte](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)                   | Fonctionnalité : `cswap desktop`             |
 | [Ouvrir Chrome par compte](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                           | Fonctionnalité : `cswap chrome`              |
+| [Conserver l'ancien choix de partage de l'historique](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)  | Correctif : ancien réglage de l'historique   |
 
 Chaque patch est un commit unique, dont le message explique le problème amont. Pour compiler depuis les sources ou travailler sur les patchs, consultez [CONTRIBUTING.md](../../CONTRIBUTING.md).
 

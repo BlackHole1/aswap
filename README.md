@@ -62,18 +62,20 @@ Claude in Chrome uses the browser's claude.ai login, not the account picked by `
 
 - **Stale account config.** If `~/.claude.json` still names account B while the keychain holds account A's token, upstream asks to log in to A again and stops refreshing B. aswap follows the account that owns the live token.
 - **Version and upgrade.** `--version`, the update check, and `upgrade` are hard-coded to the `claude-swap` package. aswap uses the package it was installed from.
+- **Earlier history setting.** Older aswap releases stored the choice to keep history per account as `session.shareHistory`. Upstream reads only `run.shareHistory` and shares history by default, so that choice would be lost and the histories merged. aswap still honors the old key.
 
 ## How it is built
 
 `upstream.json` pins one upstream commit. `bun run setup` clones that commit unchanged into `cswap/`. It then applies every patch in `patches/` with `git am`, in the order listed in [patches/.patches](patches/.patches). This follows [the layout Electron uses for its Chromium and Node patches](https://github.com/electron/electron/tree/main/patches). Each diff stays small and readable, and moving to a newer upstream is a rebase of the series.
 
-| Patch                                                                                                                        | Change                    |
-| ---------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| [Follow the live credential's owner](patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | Fix: stale account config |
-| [Follow the installed distribution](patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)     | Fix: version and upgrade  |
-| [Refresh usage on demand](patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)             | Feature: `cswap refresh`  |
-| [Open Claude Desktop per account](patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)         | Feature: `cswap desktop`  |
-| [Open Chrome per account](patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                 | Feature: `cswap chrome`   |
+| Patch                                                                                                                        | Change                       |
+| ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| [Follow the live credential's owner](patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | Fix: stale account config    |
+| [Follow the installed distribution](patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)     | Fix: version and upgrade     |
+| [Refresh usage on demand](patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)             | Feature: `cswap refresh`     |
+| [Open Claude Desktop per account](patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)         | Feature: `cswap desktop`     |
+| [Open Chrome per account](patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                 | Feature: `cswap chrome`      |
+| [Keep the earlier share-history choice](patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)     | Fix: earlier history setting |
 
 Each patch is a single commit, and its message explains the upstream problem. To build from source or work on patches, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
