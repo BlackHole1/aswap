@@ -25,7 +25,7 @@ rather than "retry now") and keeps its last measurement on screen.
 Exit code 1 when any requested account could not be refreshed.
 
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index b23212d65ec02a65547195b5a8e52400b5dc9fc3..4d2465e0299c7240f1751864a8def206a5ab7261 100644
+index d4a3069b403d703e6a9cef096fc25ce10e089c5a..848754ecd43a0adda0e7aa1e972f32314fd9b448 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
 @@ -364,6 +364,46 @@ def _unmap_command(argv: list[str]) -> None:
@@ -75,7 +75,7 @@ index b23212d65ec02a65547195b5a8e52400b5dc9fc3..4d2465e0299c7240f1751864a8def206
  def _unclaimed_command(argv: list[str]) -> None:
      """Handle `cswap unclaimed [--purge ID]` — inspect or drop a stash row.
  
-@@ -1406,6 +1446,9 @@ def main() -> None:
+@@ -1433,6 +1473,9 @@ def main() -> None:
      if argv and argv[0] == "unclaimed":
          _unclaimed_command(argv[1:])
          return
@@ -85,7 +85,7 @@ index b23212d65ec02a65547195b5a8e52400b5dc9fc3..4d2465e0299c7240f1751864a8def206
      if argv and argv[0] == "alias":
          _alias_command(argv[1:])
          return
-@@ -1442,6 +1485,7 @@ Commands:
+@@ -1469,6 +1512,7 @@ Commands:
    %(prog)s help                       show this help
    %(prog)s list                       list managed accounts
    %(prog)s status                     show current account
@@ -94,11 +94,11 @@ index b23212d65ec02a65547195b5a8e52400b5dc9fc3..4d2465e0299c7240f1751864a8def206
    %(prog)s switch <num|email>         switch to a specific account
    %(prog)s add                        add the current account
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index e9194b9b16e6739bf7901c9e17f72e3b12a4bba3..91598993a59bf2dc6b18f65f1153d3e7c964f502 100644
+index 0e2fc9bec437496233e1bb970c544ee12b3a5c9c..75fbffa22c22bafa4beaece98792345d70c5e043 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
-@@ -312,6 +312,72 @@ def _usage_entry_lines(entry: UsageEntry) -> list[str]:
-     return [dimmed(detail)]
+@@ -385,6 +385,72 @@ def _usage_entry_lines(
+     return out
  
  
 +def _deadline_note(ts: float) -> str | None:
@@ -170,7 +170,7 @@ index e9194b9b16e6739bf7901c9e17f72e3b12a4bba3..91598993a59bf2dc6b18f65f1153d3e7
  def _label_token_status(source: str, credentials: str) -> str | None:
      """Return ``oauth.build_token_status`` relabelled by credential source."""
      status = oauth.build_token_status(credentials)
-@@ -5783,9 +5849,17 @@ class ClaudeAccountSwitcher:
+@@ -5947,9 +6013,17 @@ class ClaudeAccountSwitcher:
          fetch: set[str] | None = None,
          *,
          scheduled: bool = False,
@@ -188,7 +188,7 @@ index e9194b9b16e6739bf7901c9e17f72e3b12a4bba3..91598993a59bf2dc6b18f65f1153d3e7
          ``fetch=None`` (on-demand callers: ``--list``/``--status``/switch
          strategies, dashboards) makes every account a candidate but respects
          the persisted poll plans; the auto engine passes an explicit set whose
-@@ -5859,6 +5933,7 @@ class ClaudeAccountSwitcher:
+@@ -6023,6 +6097,7 @@ class ClaudeAccountSwitcher:
                  identities,
                  respect_plans=False,
                  repair_overslept=scheduled,
@@ -196,7 +196,7 @@ index e9194b9b16e6739bf7901c9e17f72e3b12a4bba3..91598993a59bf2dc6b18f65f1153d3e7
              )
          # An expired ACTIVE credential that cannot reach the fetch path (and
          # its locked refresh) this tick — failure backoff, a concurrent
-@@ -5895,6 +5970,8 @@ class ClaudeAccountSwitcher:
+@@ -6059,6 +6134,8 @@ class ClaudeAccountSwitcher:
              accepted_records = {
                  num: record for num, record in records.items() if num in accepted
              }
@@ -205,7 +205,7 @@ index e9194b9b16e6739bf7901c9e17f72e3b12a4bba3..91598993a59bf2dc6b18f65f1153d3e7
              for num, record in accepted_records.items():
                  if record.sentinel is not None:
                      sentinels[num] = record.sentinel
-@@ -6474,6 +6551,66 @@ class ClaudeAccountSwitcher:
+@@ -6639,6 +6716,66 @@ class ClaudeAccountSwitcher:
          except Exception:
              self._logger.debug("Failed to detect running instances", exc_info=True)
  
@@ -271,7 +271,7 @@ index e9194b9b16e6739bf7901c9e17f72e3b12a4bba3..91598993a59bf2dc6b18f65f1153d3e7
 +
      def _active_account_usage(
          self, account_num: str, current_email: str, org_uuid: str
-     ) -> UsageEntry:
+     ) -> tuple[UsageEntry, float | None]:
 diff --git a/src/claude_swap/usage_store.py b/src/claude_swap/usage_store.py
 index 1fb28e95cff2695460d6f021d3e847ee2b983067..6a839088606c9182dff2175f6382d75ddfd91e4b 100644
 --- a/src/claude_swap/usage_store.py
@@ -345,7 +345,7 @@ index 1fb28e95cff2695460d6f021d3e847ee2b983067..6a839088606c9182dff2175f6382d75d
      next_poll_at = _num_or_none(row.get("nextPollAt"))
 diff --git a/tests/test_refresh_command.py b/tests/test_refresh_command.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..cd7459979613e74287daf8c899c61c5a5f513e0b
+index 0000000000000000000000000000000000000000..0aef5603fbbce772932cc34ef06d8413dc8a0475
 --- /dev/null
 +++ b/tests/test_refresh_command.py
 @@ -0,0 +1,223 @@
@@ -406,7 +406,7 @@ index 0000000000000000000000000000000000000000..cd7459979613e74287daf8c899c61c5a
 +    ``(exit_code, output, fetched slot numbers)``."""
 +    fetched: list[str] = []
 +
-+    def fetch(info, rejected_fp=None):
++    def fetch(info, rejected_fp=None, last_usage=None):
 +        fetched.append(str(info[0]))
 +        return outcomes[str(info[0])]
 +
@@ -475,7 +475,7 @@ index 0000000000000000000000000000000000000000..cd7459979613e74287daf8c899c61c5a
 +        answer is already in the store and on screen."""
 +        seen: dict[str, object] = {}
 +
-+        def fetch(info, rejected_fp=None):
++        def fetch(info, rejected_fp=None, last_usage=None):
 +            if str(info[0]) == "2":
 +                entries = switcher._usage_store.entries(
 +                    {"1": ("account1@example.com", "")}
