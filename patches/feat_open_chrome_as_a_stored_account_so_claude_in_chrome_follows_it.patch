@@ -978,7 +978,7 @@ index 0000000000000000000000000000000000000000..b195bfef3529c37df0a057ea859e0690
 +        if sys.platform != "win32":
 +            os.chmod(path, 0o700)
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index cbfe081448cbd8f9730979970116862b9148fef8..971bbe07bf56f450d635c6dce0fb97ac82bffc8d 100644
+index 4c40e8e457d78ee6dbe07ce383b66f5cac174f74..3c0926d3f62629fdcf7d5ee4c48a449955ecaa81 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
 @@ -482,6 +482,126 @@ Examples:
@@ -1108,7 +1108,7 @@ index cbfe081448cbd8f9730979970116862b9148fef8..971bbe07bf56f450d635c6dce0fb97ac
  def _unclaimed_command(argv: list[str]) -> None:
      """Handle `cswap unclaimed [--purge ID]` — inspect or drop a stash row.
  
-@@ -1530,6 +1650,9 @@ def main() -> None:
+@@ -1557,6 +1677,9 @@ def main() -> None:
      if argv and argv[0] == "desktop":
          _desktop_command(argv[1:])
          return
@@ -1118,7 +1118,7 @@ index cbfe081448cbd8f9730979970116862b9148fef8..971bbe07bf56f450d635c6dce0fb97ac
      if argv and argv[0] == "alias":
          _alias_command(argv[1:])
          return
-@@ -1585,6 +1708,11 @@ Commands:
+@@ -1612,6 +1735,11 @@ Commands:
    %(prog)s desktop --all              one Claude Desktop window per account
    %(prog)s desktop --quit <num|email> close an account's Claude Desktop window
    %(prog)s desktop                    which accounts have a window open
@@ -1130,7 +1130,7 @@ index cbfe081448cbd8f9730979970116862b9148fef8..971bbe07bf56f450d635c6dce0fb97ac
    %(prog)s map <num|email> [path]     map a directory to an account
    %(prog)s map                        list directory mappings
    %(prog)s unmap [path]               remove a directory mapping
-@@ -1619,6 +1747,7 @@ Aliases: ls=list  rm=remove  update=upgrade""",
+@@ -1646,6 +1774,7 @@ Aliases: ls=list  rm=remove  update=upgrade""",
    %(prog)s add-token sk-ant-oat01-... --email me@example.com
    %(prog)s run 2 -- --resume                 # forward args after '--' to claude
    %(prog)s desktop 2                         # Claude Desktop signed in as account 2
@@ -1138,7 +1138,7 @@ index cbfe081448cbd8f9730979970116862b9148fef8..971bbe07bf56f450d635c6dce0fb97ac
    %(prog)s auto --once                       # single auto-switch tick (cron-friendly)
    %(prog)s config set autoswitch.threshold 80
  
-@@ -2107,6 +2236,8 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
+@@ -2134,6 +2263,8 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
              if args.foreground or worker:
                  sys.exit(_menubar_foreground(switcher, service_pid, worker=worker))
              sys.exit(_menubar_start(args))
@@ -1148,7 +1148,7 @@ index cbfe081448cbd8f9730979970116862b9148fef8..971bbe07bf56f450d635c6dce0fb97ac
          # In JSON mode keep stdout pure JSON: emit the structured error envelope
          # there (exit 1) instead of a red stderr line.
 diff --git a/src/claude_swap/settings.py b/src/claude_swap/settings.py
-index 3beab49af85e901cdc28eeb77eec8acedecfe6ad..c9048c2847db9f44d0732d299322155a840fe6d5 100644
+index f2fb2bf656b457fc92d76c414d6676d0a7607b24..6e6f1be480c6b5e7c9a0d1d7c80241fca5a3e15a 100644
 --- a/src/claude_swap/settings.py
 +++ b/src/claude_swap/settings.py
 @@ -2,8 +2,8 @@
@@ -1162,7 +1162,7 @@ index 3beab49af85e901cdc28eeb77eec8acedecfe6ad..c9048c2847db9f44d0732d299322155a
  Unknown keys (future fields, other tools' experiments) survive a round trip.
  
  Reading is forgiving — a missing or corrupt file yields defaults with a logged
-@@ -132,6 +132,25 @@ class DesktopSettings:
+@@ -145,6 +145,25 @@ class DesktopSettings:
      share_sessions: bool = True
  
  
@@ -1188,7 +1188,7 @@ index 3beab49af85e901cdc28eeb77eec8acedecfe6ad..c9048c2847db9f44d0732d299322155a
  _SECTION_DEFAULT_SOURCES = {
      "autoswitch": AutoSwitchSettings,
      "ui": UiSettings,
-@@ -139,6 +158,7 @@ _SECTION_DEFAULT_SOURCES = {
+@@ -152,6 +171,7 @@ _SECTION_DEFAULT_SOURCES = {
      "updates": UpdateSettings,
      "usage": UsageSettings,
      "desktop": DesktopSettings,
@@ -1196,7 +1196,7 @@ index 3beab49af85e901cdc28eeb77eec8acedecfe6ad..c9048c2847db9f44d0732d299322155a
  }
  
  
-@@ -235,6 +255,18 @@ SETTING_SPECS: dict[str, SettingSpec] = {
+@@ -252,6 +272,18 @@ SETTING_SPECS: dict[str, SettingSpec] = {
              "desktop", "shareSessions", "share_sessions", "bool",
              help="cswap desktop shares the stock profile's local sessions with every account",
          ),
@@ -1215,7 +1215,7 @@ index 3beab49af85e901cdc28eeb77eec8acedecfe6ad..c9048c2847db9f44d0732d299322155a
      )
  }
  
-@@ -447,6 +479,33 @@ def load_desktop_settings(backup_root: Path) -> DesktopSettings:
+@@ -581,6 +613,33 @@ def load_desktop_settings(backup_root: Path) -> DesktopSettings:
      return DesktopSettings(app_path=app_path or None, share_sessions=share_sessions)
  
  
@@ -1249,7 +1249,7 @@ index 3beab49af85e901cdc28eeb77eec8acedecfe6ad..c9048c2847db9f44d0732d299322155a
  def save_settings(backup_root: Path, settings: AutoSwitchSettings) -> None:
      """Write the autoswitch section, preserving unknown keys and sections."""
      path = settings_path(backup_root)
-@@ -622,6 +681,7 @@ def effective_settings(backup_root: Path) -> list[tuple[SettingSpec, object, boo
+@@ -756,6 +815,7 @@ def effective_settings(backup_root: Path) -> list[tuple[SettingSpec, object, boo
          "updates": load_update_settings(backup_root),
          "usage": load_usage_settings(backup_root),
          "desktop": load_desktop_settings(backup_root),
@@ -1258,10 +1258,10 @@ index 3beab49af85e901cdc28eeb77eec8acedecfe6ad..c9048c2847db9f44d0732d299322155a
      rows = []
      for spec in SETTING_SPECS.values():
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index 469bc85275d3450cb0c66d5baafbbcfe9bb5c83b..9b73785b020d8dbd20da4621774219e61ff21a29 100644
+index 9e44fa513bee88f83fea237f0ef3e16dcf6609e1..f7ced1f5acc6f4964761b7fc9d5695ba98a4b641 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
-@@ -996,7 +996,7 @@ class ClaudeAccountSwitcher:
+@@ -1069,7 +1069,7 @@ class ClaudeAccountSwitcher:
      def _app_profile_managers(self) -> list:
          """Whatever keeps a per-account app profile in a directory named
          after the slot number, which swap and move therefore take along."""
@@ -1270,7 +1270,7 @@ index 469bc85275d3450cb0c66d5baafbbcfe9bb5c83b..9b73785b020d8dbd20da4621774219e6
  
      def _ensure_app_profiles_closed(
          self, account_num: str, email: str, action: str
-@@ -1057,9 +1057,12 @@ class ClaudeAccountSwitcher:
+@@ -1130,9 +1130,12 @@ class ClaudeAccountSwitcher:
          self._ensure_no_live_session(account_num, email, "the operation")
          desktop = self._desktop_manager()
          desktop.ensure_closed(account_num, email, "the operation")
@@ -1284,7 +1284,7 @@ index 469bc85275d3450cb0c66d5baafbbcfe9bb5c83b..9b73785b020d8dbd20da4621774219e6
          self._delete_account_credentials(account_num, email)
          config_file = self.configs_dir / f".claude-config-{account_num}-{email}.json"
          if config_file.exists():
-@@ -1072,6 +1075,12 @@ class ClaudeAccountSwitcher:
+@@ -1145,6 +1148,12 @@ class ClaudeAccountSwitcher:
  
          return DesktopManager(self)
  
@@ -1297,7 +1297,7 @@ index 469bc85275d3450cb0c66d5baafbbcfe9bb5c83b..9b73785b020d8dbd20da4621774219e6
      def _prune_mappings(self, email: str, org_uuid: str) -> None:
          """Drop directory mappings for an identity that no longer has a slot.
  
-@@ -8464,6 +8473,23 @@ class ClaudeAccountSwitcher:
+@@ -8803,6 +8812,23 @@ class ClaudeAccountSwitcher:
              if desktop_root.is_dir()
              else []
          )
@@ -1321,7 +1321,7 @@ index 469bc85275d3450cb0c66d5baafbbcfe9bb5c83b..9b73785b020d8dbd20da4621774219e6
  
          warning("This will remove ALL claude-swap data from your system:")
          print(f"  - Backup directory: {self.backup_dir}")
-@@ -8503,6 +8529,8 @@ class ClaudeAccountSwitcher:
+@@ -8842,6 +8868,8 @@ class ClaudeAccountSwitcher:
              print(dimmed("    Copy them somewhere else first if you want them."))
          if desktop_profiles:
              print("  - All Claude Desktop profiles (each account's desktop login)")
@@ -1330,7 +1330,7 @@ index 469bc85275d3450cb0c66d5baafbbcfe9bb5c83b..9b73785b020d8dbd20da4621774219e6
          print()
          print(dimmed("Note: This does NOT affect your current Claude Code login."))
          print()
-@@ -8579,6 +8607,8 @@ class ClaudeAccountSwitcher:
+@@ -8918,6 +8946,8 @@ class ClaudeAccountSwitcher:
              removed_items.append(
                  f"Claude Desktop profiles: {', '.join(desktop_profiles)}"
              )
@@ -2464,11 +2464,11 @@ index 0000000000000000000000000000000000000000..c4b8ae41a9ca5e5581219a58d6718847
 +        s = load_chrome_settings(tmp_path)
 +        assert s.clone_stock_profile is True and s.follow_switch is False
 diff --git a/tests/test_config_cli.py b/tests/test_config_cli.py
-index 719af390f7d7b1c2495ab5a9a611708a4827aef5..9a32791567b702dffdc7b0eba39d259e19d7d60b 100644
+index eb255acc94840a65b2bc5f0703a233c2f33df76c..db51e0a7bc8de911035fe6985a9eec6cf45ffc71 100644
 --- a/tests/test_config_cli.py
 +++ b/tests/test_config_cli.py
-@@ -55,9 +55,12 @@ class TestConfigList:
-             "usage.headerProbe",
+@@ -56,9 +56,12 @@ class TestConfigList:
+             "usage.fableProbe",
              "desktop.appPath",
              "desktop.shareSessions",
 +            "chrome.appPath",
@@ -2476,25 +2476,25 @@ index 719af390f7d7b1c2495ab5a9a611708a4827aef5..9a32791567b702dffdc7b0eba39d259e
 +            "chrome.followSwitch",
          ):
              assert key in out
--        assert out.count("(default)") == 15
-+        assert out.count("(default)") == 18
+-        assert out.count("(default)") == 16
++        assert out.count("(default)") == 19
  
      def test_set_key_not_marked_default(self, temp_home, capsys):
          _run(["set", "autoswitch.cooldownSeconds", "600"], capsys)
-@@ -84,7 +87,7 @@ class TestConfigList:
+@@ -85,7 +88,7 @@ class TestConfigList:
          assert payload["schemaVersion"] == 1
          assert payload["path"].endswith("settings.json")
          by_key = {entry["key"]: entry for entry in payload["settings"]}
--        assert len(by_key) == 15
-+        assert len(by_key) == 18
+-        assert len(by_key) == 16
++        assert len(by_key) == 19
          assert by_key["autoswitch.threshold"]["value"] == 90.0
          assert by_key["autoswitch.threshold"]["isSet"] is False
          # An unset weekly line reports null, not the threshold it falls back
 diff --git a/tests/test_settings.py b/tests/test_settings.py
-index 24811fdbf7972a0d48dcbf29e049ff1d9ed0103c..a46bb13b962018b834f580c2fbd6a108e0004f49 100644
+index f846585d8199a2df708fd6ff4849e38a09b16f77..6949b1903bf30f8ddafc0565a035dcbf08991baa 100644
 --- a/tests/test_settings.py
 +++ b/tests/test_settings.py
-@@ -16,6 +16,7 @@ from claude_swap.settings import (
+@@ -17,6 +17,7 @@ from claude_swap.settings import (
      SETTING_SPECS,
      atomic_write_json,
      AutoSwitchSettings,
@@ -2502,7 +2502,7 @@ index 24811fdbf7972a0d48dcbf29e049ff1d9ed0103c..a46bb13b962018b834f580c2fbd6a108
      DesktopSettings,
      RunSettings,
      UiSettings,
-@@ -290,6 +291,9 @@ class TestSettingSpecs:
+@@ -318,6 +319,9 @@ class TestSettingSpecs:
          assert by_section["desktop"] == {
              f.name for f in DesktopSettings.__dataclass_fields__.values()
          }
@@ -2512,7 +2512,7 @@ index 24811fdbf7972a0d48dcbf29e049ff1d9ed0103c..a46bb13b962018b834f580c2fbd6a108
  
      def test_defaults_match_dataclass(self):
          sources = {
-@@ -299,6 +303,7 @@ class TestSettingSpecs:
+@@ -327,6 +331,7 @@ class TestSettingSpecs:
              "updates": UpdateSettings(),
              "usage": UsageSettings(),
              "desktop": DesktopSettings(),

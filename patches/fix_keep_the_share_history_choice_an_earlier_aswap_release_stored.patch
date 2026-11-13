@@ -19,11 +19,43 @@ it is set, so `cswap config set run.shareHistory` still decides. The
 fallback answers as an explicit choice, so the Windows warning and the
 note that sharing is the default treat it as one.
 
+Upstream also lists the keys in settings.json that nothing reads
+(realiti4/claude-swap#581), in `cswap config` and in the auto-switch
+loop's log, and knows only its own sections. `session.shareHistory` is
+left out of that list while it decides, since "has no effect" would be
+false and would invite deleting the one key that keeps the histories
+apart. Once `run.shareHistory` answers it is listed, with
+`run.shareHistory` as the name to use.
+
 diff --git a/src/claude_swap/settings.py b/src/claude_swap/settings.py
-index c9048c2847db9f44d0732d299322155a840fe6d5..943d5e80ccb298c8acc2a1e6bc9d6d257874711c 100644
+index 6e6f1be480c6b5e7c9a0d1d7c80241fca5a3e15a..d7dae81787a390bda3031ad56f4b7287d4a6ab2d 100644
 --- a/src/claude_swap/settings.py
 +++ b/src/claude_swap/settings.py
-@@ -414,10 +414,20 @@ def explicit_share_history(backup_root: Path) -> bool | None:
+@@ -453,6 +453,23 @@ def _unrecognized(raw: dict) -> list[UnrecognizedKey]:
+     for name, value in raw.items():
+         if name == "schemaVersion":
+             continue
++        if name == "session" and isinstance(value, dict):
++            # explicit_share_history reads shareHistory from here while
++            # run.shareHistory does not answer, so it is a key with an
++            # effect until then.
++            run = raw.get("run")
++            answered = isinstance(run, dict) and isinstance(
++                run.get("shareHistory"), bool
++            )
++            found.extend(
++                UnrecognizedKey(
++                    f"session.{key}",
++                    "run.shareHistory" if key == "shareHistory" else None,
++                )
++                for key in value
++                if key != "shareHistory" or answered
++            )
++            continue
+         known = _SECTION_KEYS.get(name)
+         if known is None:
+             # A dotted setting name here is the spelling `cswap config`
+@@ -540,10 +557,20 @@ def explicit_share_history(backup_root: Path) -> bool | None:
      sharing on Windows) is dropped silently while a setting someone wrote
      earns a warning, and only a user who never chose is told that sharing is
      the default. A value that is not a boolean counts as never set.
@@ -48,10 +80,10 @@ index c9048c2847db9f44d0732d299322155a840fe6d5..943d5e80ccb298c8acc2a1e6bc9d6d25
  
  def load_update_settings(backup_root: Path) -> UpdateSettings:
 diff --git a/tests/test_settings.py b/tests/test_settings.py
-index a46bb13b962018b834f580c2fbd6a108e0004f49..eccc40ffeb68c55c2480716c4c97929cafdbf3a6 100644
+index 6949b1903bf30f8ddafc0565a035dcbf08991baa..c682c8778f02f98426ad9d6f89b98c32d0876561 100644
 --- a/tests/test_settings.py
 +++ b/tests/test_settings.py
-@@ -208,6 +208,35 @@ class TestRunSettings:
+@@ -212,6 +212,51 @@ class TestRunSettings:
          assert explicit_share_history(tmp_path) is chosen
          assert load_run_settings(tmp_path).share_history is chosen
  
@@ -83,6 +115,22 @@ index a46bb13b962018b834f580c2fbd6a108e0004f49..eccc40ffeb68c55c2480716c4c97929c
 +            "session": {"shareHistory": False},
 +        }))
 +        assert load_run_settings(tmp_path).share_history is False
++
++    def test_the_earlier_key_is_not_reported_as_read_by_nothing(self, tmp_path: Path):
++        """While it decides, `cswap config` must not say it has no effect."""
++        settings_path(tmp_path).write_text(json.dumps({
++            "session": {"shareHistory": False, "other": 1},
++        }))
++        assert unrecognized_keys(tmp_path) == [UnrecognizedKey("session.other")]
++
++    def test_the_earlier_key_is_reported_once_the_run_key_decides(self, tmp_path: Path):
++        settings_path(tmp_path).write_text(json.dumps({
++            "run": {"shareHistory": True},
++            "session": {"shareHistory": False},
++        }))
++        assert unrecognized_keys(tmp_path) == [
++            UnrecognizedKey("session.shareHistory", "run.shareHistory"),
++        ]
 +
      def test_unset_goes_back_to_the_default(self, tmp_path: Path):
          set_setting(tmp_path, "run.shareHistory", "false")

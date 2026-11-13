@@ -47,10 +47,10 @@ index 8757fd107fb185fdece5753601164e475466b0de..6b9095b5167d031365aa00da0a7b40df
  from claude_swap.switcher import ClaudeAccountSwitcher
  
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index 0221d5eb5ecdeb01bd644cbb52bcfef5a53ab35c..b23212d65ec02a65547195b5a8e52400b5dc9fc3 100644
+index 854d81f2b3658543f03c67550ee500f2cd7d82e6..d4a3069b403d703e6a9cef096fc25ce10e089c5a 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
-@@ -1157,15 +1157,17 @@ def _menubar_extra_missing() -> str | None:
+@@ -1184,15 +1184,17 @@ def _menubar_extra_missing() -> str | None:
  
      if importlib.util.find_spec("rumps") is not None:
          return None
@@ -128,10 +128,10 @@ index 0000000000000000000000000000000000000000..9af00e281d7d7f366857db2cc71a9e97
 +    install ``claude-swap[menubar]`` would put the other project in place."""
 +    return f"{distribution_name()}[menubar]"
 diff --git a/src/claude_swap/menubar.py b/src/claude_swap/menubar.py
-index 5364c7fae7254657a56df70ef48af23c6c982a4a..a5f7fb2557b5e9c4f204ac25249f7e3565a08c10 100644
+index 92630f58544a7caeb40aafd27394ca81d62814fc..74993a9f7ada7a525f795f701230a0ac3b925355 100644
 --- a/src/claude_swap/menubar.py
 +++ b/src/claude_swap/menubar.py
-@@ -681,15 +681,18 @@ def framework_build_warning(
+@@ -695,15 +695,18 @@ def framework_build_warning(
  
          install_method = _detect_install_method()
  
@@ -152,7 +152,7 @@ index 5364c7fae7254657a56df70ef48af23c6c982a4a..a5f7fb2557b5e9c4f204ac25249f7e35
          )
      else:
          remedy = (
-@@ -714,9 +717,11 @@ def run(switcher) -> int:
+@@ -728,9 +731,11 @@ def run(switcher) -> int:
          # guard around ``from claude_swap.menubar import run`` can never see a
          # missing extra — the failure lands here at call time. Raise the
          # error type the CLI already renders cleanly instead of a traceback.
