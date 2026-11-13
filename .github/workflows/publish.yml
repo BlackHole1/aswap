@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -40,7 +40,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: .bun-version
-      - uses: astral-sh/setup-uv@v5
+      # setup-uv publishes no major tags since v8, so the full version is pinned.
+      # A release build takes nothing from the Actions cache.
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: false
       - run: bun install --frozen-lockfile
       - name: Compute version
         id: version
