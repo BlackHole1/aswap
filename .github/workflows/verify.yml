@@ -15,13 +15,17 @@ jobs:
     name: Lint, patches, tests, build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: .bun-version
-      - uses: astral-sh/setup-uv@v5
+      # setup-uv publishes no major tags since v8, so the full version is pinned.
+      # cswap/uv.lock is cloned later, so the cache is keyed on the pin instead.
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          cache-dependency-glob: upstream.json
       - name: Install script tooling
         run: bun install --frozen-lockfile
       - name: Lint (oxlint)
@@ -40,7 +44,7 @@ jobs:
         run: bun run test
       - name: Build the wheel
         run: bun run build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/
@@ -66,13 +70,17 @@ jobs:
       - name: Keep LF line endings
         if: runner.os == 'Windows'
         run: git config --global core.autocrlf false
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: .bun-version
-      - uses: astral-sh/setup-uv@v5
+      # setup-uv publishes no major tags since v8, so the full version is pinned.
+      # cswap/uv.lock is cloned later, so the cache is keyed on the pin instead.
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          cache-dependency-glob: upstream.json
       - name: Apply the series
         run: bun run patches apply
       - name: Upstream test suite on the patched tree
