@@ -189,10 +189,10 @@ index cd1bfce3dff283eae95d8617c126d1d49e5f40a5..e5405bda4b4bda19f346446eb38148f9
      def sync_shared_state(self, data_dir: Path) -> None:
 diff --git a/src/claude_swap/desktop_envs.py b/src/claude_swap/desktop_envs.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..0f431b0fff2b7ad1c221aea478e63893cec07f96
+index 0000000000000000000000000000000000000000..d5f715f104852d3c97abd4e38eb8427aaa09af44
 --- /dev/null
 +++ b/src/claude_swap/desktop_envs.py
-@@ -0,0 +1,637 @@
+@@ -0,0 +1,646 @@
 +"""Give one account's Claude Desktop the Code tab environments of another.
 +
 +An environment (a named folder or SSH target with its model, effort and
@@ -526,9 +526,18 @@ index 0000000000000000000000000000000000000000..0f431b0fff2b7ad1c221aea478e63893
 +                shutil.copy2(src, self.dest / name)
 +
 +    def restore(self) -> None:
++        """Put the copied files back, in place. The caller still holds the
++        database's ``LOCK`` file open, which Windows will not let anyone
++        delete or replace, so that one file is left as it is: it has no
++        content."""
 +        live = leveldb_dir(self.data_dir)
-+        shutil.rmtree(live)
-+        shutil.copytree(self.dest / "leveldb", live)
++        saved = {path.name: path for path in (self.dest / "leveldb").iterdir()}
++        for path in live.iterdir():
++            if path.name != "LOCK" and path.name not in saved and path.is_file():
++                path.unlink()
++        for name, path in saved.items():
++            if name != "LOCK" and path.is_file():
++                shutil.copy2(path, live / name)
 +        for name, existed in self.had.items():
 +            target = self.data_dir / name
 +            if existed:
