@@ -48,7 +48,7 @@ Claude Desktop ne garde qu'une connexion à la fois. `cswap desktop 2` ouvre le 
 
 <img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
-`cswap desktop --sync-envs 2 --from 1` remplace les environnements de l'onglet Code du compte 2 par une copie de ceux du compte 1 : environnements locaux et SSH, leurs réglages et, sous macOS, leurs variables d'environnement. Fermez d'abord la fenêtre du compte 2. L'état précédent est conservé dans le répertoire de sauvegarde.
+`cswap desktop --sync-envs 2 --from 1` remplace les environnements de l'onglet Code du compte 2 par une copie de ceux du compte 1 : environnements locaux et SSH, leurs réglages et, sous macOS, leurs variables d'environnement. Quittez d'abord toutes les instances de Claude Desktop connectées au compte 2 : sa propre fenêtre, ainsi que l'application habituelle si elle est connectée à ce compte. L'état précédent est conservé dans le répertoire de sauvegarde.
 
 ### Un profil Chrome par compte
 

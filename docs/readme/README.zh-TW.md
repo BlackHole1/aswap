@@ -48,7 +48,7 @@ Claude Desktop 同一時間只能登入一個帳號。`cswap desktop 2` 會在�
 
 <img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
-`cswap desktop --sync-envs 2 --from 1` 會用帳號 1 的副本取代帳號 2 在 Code 分頁中的環境：包括本機和 SSH 環境、它們的設定，以及 macOS 上的環境變數。請先關閉帳號 2 的視窗。取代前的狀態會保留在備份目錄中。
+`cswap desktop --sync-envs 2 --from 1` 會用帳號 1 的副本取代帳號 2 在 Code 分頁中的環境：包括本機和 SSH 環境、它們的設定，以及 macOS 上的環境變數。請先結束所有登入帳號 2 的 Claude Desktop：除了它的獨立視窗，如果一般應用程式登入的也是帳號 2，也要一併結束。取代前的狀態會保留在備份目錄中。
 
 ### 每個帳號一個 Chrome 設定檔
 

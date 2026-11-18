@@ -63,7 +63,7 @@ profile's database and three files are copied under
 (the newest three runs are kept) and put back if a step fails.
 
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index 3c0926d3f62629fdcf7d5ee4c48a449955ecaa81..2f6a60307b5c1e670d79f880933ca364a95bebfa 100644
+index 3c0926d3f62629fdcf7d5ee4c48a449955ecaa81..3707e2e923d2afb71ddc1778686385fa0805c86a 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
 @@ -405,7 +405,7 @@ def _refresh_command(argv: list[str]) -> None:
@@ -132,7 +132,7 @@ index 3c0926d3f62629fdcf7d5ee4c48a449955ecaa81..2f6a60307b5c1e670d79f880933ca364
 +    for flag in ("quit", "sync_envs"):
 +        if getattr(args, flag) and not (args.all or args.accounts):
 +            parser.error(f"--{flag.replace('_', '-')} needs an account or --all")
-+    if args.source and not args.sync_envs:
++    if args.source is not None and not args.sync_envs:
 +        parser.error("--from only applies to --sync-envs")
  
      try:
@@ -189,10 +189,10 @@ index cd1bfce3dff283eae95d8617c126d1d49e5f40a5..e5405bda4b4bda19f346446eb38148f9
      def sync_shared_state(self, data_dir: Path) -> None:
 diff --git a/src/claude_swap/desktop_envs.py b/src/claude_swap/desktop_envs.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..5a99595dc3dd03fcf1c95efeffcccc130129b394
+index 0000000000000000000000000000000000000000..1051e5feaae7b65252aad0704ce90822338a2ae8
 --- /dev/null
 +++ b/src/claude_swap/desktop_envs.py
-@@ -0,0 +1,663 @@
+@@ -0,0 +1,736 @@
 +"""Give one account's Claude Desktop the Code tab environments of another.
 +
 +An environment (a named folder or SSH target with its model, effort and
@@ -272,7 +272,7 @@ index 0000000000000000000000000000000000000000..5a99595dc3dd03fcf1c95efeffcccc13
 +KEYCHAIN_PROMPT_TIMEOUT_S = 120.0
 +
 +BACKUPS_KEPT = 3
-+SOURCE_READ_ATTEMPTS = 3
++SOURCE_READ_ATTEMPTS = 5
 +
 +
 +class EnvVarsUnavailable(Exception):
@@ -563,14 +563,18 @@ index 0000000000000000000000000000000000000000..5a99595dc3dd03fcf1c95efeffcccc13
 +                target.unlink(missing_ok=True)
 +
 +
-+def _prune_backups(parent: Path) -> None:
-+    """Keep the newest ``BACKUPS_KEPT`` runs under ``parent``; a run's name
-+    starts with its time, so the names sort by age."""
++def _prune_backups(parent: Path, current: Path) -> None:
++    """Keep ``current`` and the newest runs beside it under ``parent``,
++    ``BACKUPS_KEPT`` in all. Age is the directory's own time: two runs in
++    the same second differ only in the random part of their names."""
 +    try:
-+        runs = sorted(p for p in parent.iterdir() if p.is_dir())
++        others = sorted(
++            (p for p in parent.iterdir() if p.is_dir() and p != current),
++            key=lambda p: (p.stat().st_mtime_ns, p.name),
++        )
 +    except OSError:
 +        return
-+    for stale in runs[:-BACKUPS_KEPT]:
++    for stale in others[:max(0, len(others) - (BACKUPS_KEPT - 1))]:
 +        shutil.rmtree(stale, ignore_errors=True)
 +
 +
@@ -583,21 +587,25 @@ index 0000000000000000000000000000000000000000..5a99595dc3dd03fcf1c95efeffcccc13
 +        value = data.get(key)
 +        return value if isinstance(value, list) else []
 +
++    def ident(config: object) -> str | None:
++        """The connection's id; None for anything that is not a string,
++        which is then kept as a connection of its own."""
++        value = config.get("id") if isinstance(config, dict) else None
++        return value if isinstance(value, str) else None
++
 +    configs = list(entries(source, "configs"))
-+    taken = {c.get("id") for c in configs if isinstance(c, dict)}
-+    configs += [
-+        c for c in entries(target, "configs")
-+        if not (isinstance(c, dict) and c.get("id") in taken)
-+    ]
++    taken = {ident(c) for c in configs} - {None}
++    configs += [c for c in entries(target, "configs") if ident(c) not in taken]
 +    hosts = list(entries(source, "trustedHosts"))
 +    hosts += [h for h in entries(target, "trustedHosts") if h not in hosts]
 +    return {**target, **source, "configs": configs, "trustedHosts": hosts}
 +
 +
-+def _write_env_vars(
++def _planned_env_vars(
 +    data_dir: Path, account_uuid: str, envs: Environments, safe_storage: SafeStorage
-+) -> None:
-+    """Make the profile's environment variables the source's.
++) -> dict | None:
++    """The profile's environment-variable file with the source's variables
++    in it, or None when it already holds them.
 +
 +    The profile-wide part replaces the profile's, or is removed when the
 +    source has none. The per-environment part replaces this account's entry
@@ -605,11 +613,15 @@ index 0000000000000000000000000000000000000000..5a99595dc3dd03fcf1c95efeffcccc13
 +    only needed when either side has per-environment variables.
 +
 +    Raises:
-+        EnvVarsUnavailable: the profile's own stored variables do not
-+            decrypt, so rewriting them would drop what is there.
++        EnvVarsUnavailable: the profile's own file or stored variables do
++            not read, so rewriting them would drop what is there.
 +    """
 +    path = data_dir / ENV_FILE
-+    current = _read_json(path) or {}
++    current = _read_json(path)
++    if current is None:
++        if path.exists():
++            raise EnvVarsUnavailable(f"{path} is not readable JSON")
++        current = {}
 +    updated = {
 +        key: value for key, value in current.items()
 +        if key not in ("envVars", "tmpDirOverride")
@@ -629,18 +641,66 @@ index 0000000000000000000000000000000000000000..5a99595dc3dd03fcf1c95efeffcccc13
 +            updated["scopedEnvVars"] = safe_storage.encrypt(
 +                json.dumps(scopes, separators=(",", ":"))
 +            )
-+    if updated != current:
-+        _write_json(path, updated)
++    return updated if updated != current else None
++
++
++def _planned_files(
++    data_dir: Path, account_uuid: str, envs: Environments,
++    safe_storage: SafeStorage, copy_env_vars: bool,
++) -> tuple[list[tuple[Path, dict]], str | None]:
++    """Every file to write beside the database, with its new content, and
++    the reason environment variables are left alone, if they are.
++
++    Worked out in full before anything is written: this is where a file
++    that does not read is found, and where macOS asks for the Keychain key,
++    so neither can happen with the profile half changed.
++
++    Raises:
++        SessionError: the profile's SSH connections exist but do not read;
++            replacing the file would drop the ones only it has.
++    """
++    files: list[tuple[Path, dict]] = []
++    if envs.mirror is not None:
++        mirror = _read_json(data_dir / MIRROR_FILE) or {}
++        buckets = mirror.get("byAccount")
++        mirror["byAccount"] = {
++            **(buckets if isinstance(buckets, dict) else {}),
++            account_uuid: envs.mirror,
++        }
++        files.append((data_dir / MIRROR_FILE, mirror))
++    if envs.ssh is not None:
++        path = data_dir / SSH_FILE
++        current = _read_json(path)
++        if current is None and path.exists():
++            raise SessionError(
++                f"{path} is not readable JSON; fix or remove it, then retry. "
++                "Nothing was changed"
++            )
++        files.append((path, merge_ssh(current, envs.ssh)))
++    why = None
++    if copy_env_vars:
++        try:
++            planned = _planned_env_vars(data_dir, account_uuid, envs, safe_storage)
++        except EnvVarsUnavailable as exc:
++            why = str(exc)
++        else:
++            if planned is not None:
++                files.append((data_dir / ENV_FILE, planned))
++    return files, why
 +
 +
 +def replace_environments(
 +    data_dir: Path, account_uuid: str, envs: Environments,
-+    backup_root: Path, safe_storage: SafeStorage, *, copy_env_vars: bool,
++    backup_root: Path, safe_storage: SafeStorage, *,
++    copy_env_vars: bool, stock: bool = False,
 +) -> tuple[Path, str | None]:
 +    """Replace the account's environments in the profile at ``data_dir``.
 +
 +    The caller has checked that no app uses the profile; the database lock
-+    is taken as well, so one that is missed still refuses the write. Returns
++    is taken as well, so one that is missed still refuses the write.
++    ``stock`` says the profile is the stock one, which belongs to whoever
++    signed in to it last: that is checked again under the lock, since the
++    app may have run as another account since the caller looked. Returns
 +    where the profile's previous state was copied, and the reason its
 +    environment variables were left alone, if they were.
 +
@@ -651,44 +711,45 @@ index 0000000000000000000000000000000000000000..5a99595dc3dd03fcf1c95efeffcccc13
 +    run = f"{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
 +    backup = _Backup(data_dir, backup_root / run)
 +    directory = leveldb_dir(data_dir)
-+    why = None
 +    try:
 +        with leveldb.locked(directory):
++            if stock and desktop.stock_account_uuid(data_dir) != account_uuid:
++                raise SessionError(
++                    "the stock profile is no longer signed in as this account; "
++                    "nothing was changed"
++                )
++            files, why = _planned_files(
++                data_dir, account_uuid, envs, safe_storage, copy_env_vars
++            )
 +            backup.take()
 +            try:
 +                leveldb.put(directory, store_key(account_uuid), envs.store)
-+                if envs.mirror is not None:
-+                    mirror = _read_json(data_dir / MIRROR_FILE) or {}
-+                    buckets = mirror.get("byAccount")
-+                    mirror["byAccount"] = {
-+                        **(buckets if isinstance(buckets, dict) else {}),
-+                        account_uuid: envs.mirror,
-+                    }
-+                    _write_json(data_dir / MIRROR_FILE, mirror)
-+                if envs.ssh is not None:
-+                    _write_json(
-+                        data_dir / SSH_FILE,
-+                        merge_ssh(_read_json(data_dir / SSH_FILE), envs.ssh),
-+                    )
-+                if copy_env_vars:
-+                    try:
-+                        _write_env_vars(data_dir, account_uuid, envs, safe_storage)
-+                    except EnvVarsUnavailable as exc:
-+                        why = str(exc)
-+            except (leveldb.LevelDBError, OSError) as exc:
++                for path, content in files:
++                    _write_json(path, content)
++            except BaseException as exc:
++                # Ctrl+C included: a profile is never left half written.
++                expected = isinstance(exc, (leveldb.LevelDBError, OSError))
 +                try:
 +                    backup.restore()
 +                except OSError as undo:
-+                    raise SessionError(
-+                        f"{exc}; putting the profile back failed too ({undo}). "
-+                        f"Its previous state is under {backup.dest}"
-+                    ) from exc
++                    stranded = (
++                        f"putting the profile back failed ({undo}). Its "
++                        f"previous state is under {backup.dest}"
++                    )
++                    if expected:
++                        raise SessionError(f"{exc}; {stranded}") from exc
++                    error(f"  {data_dir}: {stranded}")
++                    raise exc
 +                shutil.rmtree(backup.dest, ignore_errors=True)
-+                raise SessionError(f"{exc}; the profile was put back as it was") from exc
++                if expected:
++                    raise SessionError(
++                        f"{exc}; the profile was put back as it was"
++                    ) from exc
++                raise
 +    except (leveldb.LevelDBError, OSError) as exc:
 +        shutil.rmtree(backup.dest, ignore_errors=True)
 +        raise SessionError(f"{exc}; nothing was changed") from exc
-+    _prune_backups(backup_root)
++    _prune_backups(backup_root, backup.dest)
 +    return backup.dest, why
 +
 +
@@ -748,8 +809,10 @@ index 0000000000000000000000000000000000000000..5a99595dc3dd03fcf1c95efeffcccc13
 +def _resolve_source(manager: DesktopManager, source: str | None) -> tuple[str, str]:
 +    from claude_swap.settings import load_desktop_settings
 +
++    if source is not None and not source.strip():
++        raise ConfigError("--from needs an account: a number, alias or email")
 +    configured = load_desktop_settings(manager.switcher.backup_dir).env_source
-+    ident = source or configured
++    ident = source if source is not None else configured
 +    if not ident:
 +        raise ConfigError(
 +            "no account to copy environments from; pass --from <num|email>, or "
@@ -758,7 +821,7 @@ index 0000000000000000000000000000000000000000..5a99595dc3dd03fcf1c95efeffcccc13
 +    try:
 +        number, email, _ = manager.switcher.resolve_account(ident)
 +    except AccountNotFoundError as exc:
-+        where = "--from" if source else "desktop.envSource"
++        where = "--from" if source is not None else "desktop.envSource"
 +        raise ConfigError(f"{where} {ident}: account not found") from exc
 +    return number, email
 +
@@ -831,37 +894,47 @@ index 0000000000000000000000000000000000000000..5a99595dc3dd03fcf1c95efeffcccc13
 +            error(f"  {label}: {blocked}")
 +            failed = True
 +            continue
-+        kept, notes = [], []
-+        try:
-+            for home in homes:
-+                name = "stock" if home.stock else home.data_dir.name
++        kept, notes, broke = [], [], None
++        for home in homes:
++            name = "stock" if home.stock else home.data_dir.name
++            where = "the stock profile" if home.stock else f"profile {name}"
++            try:
 +                dest, why = replace_environments(
 +                    home.data_dir, account_uuid, envs,
 +                    backup_base / f"desktop-envs-{name}", safe_storage,
 +                    copy_env_vars=(
 +                        env_why is None and manager.platform == Platform.MACOS
 +                    ),
++                    stock=home.stock,
 +                )
-+                kept.append(dest)
-+                if why:
-+                    notes.append(why)
-+        except SessionError as exc:
-+            error(f"  {label}: {exc}")
++            except SessionError as exc:
++                broke = f"{where}: {exc}"
++                break
++            kept.append((where, dest))
++            if why:
++                notes.append(why)
++        if broke:
++            error(f"  {label}: {broke}")
 +            failed = True
-+            continue
-+        print(f"  {label} {accent('synced')}")
-+        for dest in kept:
-+            print(dimmed(f"     previous state kept under {dest}"))
++            for where, dest in kept:
++                warning(
++                    f"     {where} was already synced; its previous state is "
++                    f"kept under {dest}"
++                )
++        else:
++            print(f"  {label} {accent('synced')}")
++            for _, dest in kept:
++                print(dimmed(f"     previous state kept under {dest}"))
 +        for why in notes:
 +            warning(f"     its environment variables were left as they were: {why}")
 +            failed = True
 +    return 1 if failed else 0
 diff --git a/src/claude_swap/leveldb.py b/src/claude_swap/leveldb.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..b264fb35316fd157471317071492ee78b7bfa456
+index 0000000000000000000000000000000000000000..7cf7d5960a37197c3b324819e0733be95449cd95
 --- /dev/null
 +++ b/src/claude_swap/leveldb.py
-@@ -0,0 +1,511 @@
+@@ -0,0 +1,559 @@
 +"""Read a LevelDB database and add one entry to it, without a dependency.
 +
 +Chromium keeps a profile's ``localStorage`` in a LevelDB database, and
@@ -962,21 +1035,23 @@ index 0000000000000000000000000000000000000000..b264fb35316fd157471317071492ee78
 +# -- log format (write-ahead log and MANIFEST) --------------------------------
 +
 +
-+def _scan_log(data: bytes) -> tuple[list[bytes], int]:
-+    """The logical records of a log-format file, and the offset where the
-+    last intact physical record ends.
++def _scan_log(data: bytes) -> tuple[list[bytes], int, bool]:
++    """The logical records of a log-format file, the offset where the last
++    intact physical record ends, and whether anything in it was damaged.
 +
 +    A record that fails its checksum or runs past its block drops the rest
 +    of that block, as LevelDB's reader does: a write torn by a crash costs
-+    its own block and nothing after it.
++    its own block and nothing after it. Zero bytes are padding, not damage.
 +    """
 +    records: list[bytes] = []
 +    pending: bytearray | None = None
 +    pos = clean_end = 0
 +    size = len(data)
++    damaged = False
 +    while pos < size:
 +        left = BLOCK_SIZE - pos % BLOCK_SIZE
 +        if left < _HEADER_SIZE or pos + _HEADER_SIZE > size:
++            damaged = damaged or any(data[pos:pos + left])
 +            pos += left
 +            continue
 +        checksum, length, kind = struct.unpack_from("<IHB", data, pos)
@@ -989,6 +1064,7 @@ index 0000000000000000000000000000000000000000..b264fb35316fd157471317071492ee78
 +            and _masked(crc32c(data[pos + 6:end])) == checksum
 +        )
 +        if not intact:
++            damaged = damaged or any(data[pos:pos + _HEADER_SIZE])
 +            pos += left
 +            pending = None
 +            continue
@@ -1004,12 +1080,24 @@ index 0000000000000000000000000000000000000000..b264fb35316fd157471317071492ee78
 +            if kind == _LAST:
 +                records.append(bytes(pending))
 +                pending = None
-+    return records, clean_end
++    return records, clean_end, damaged
 +
 +
-+def log_records(data: bytes) -> list[bytes]:
-+    """The logical records of a log-format file, in order."""
-+    return _scan_log(data)[0]
++def log_records(data: bytes, *, strict: bool = False) -> list[bytes]:
++    """The logical records of a log-format file, in order.
++
++    A write-ahead log is read leniently: its tail may be a write a crash
++    cut short. ``strict`` is for the MANIFEST, where a dropped record would
++    silently bring back an older set of tables; LevelDB refuses to open a
++    database whose MANIFEST is damaged, and so does this.
++
++    Raises:
++        ValueError: ``strict``, and a record is damaged.
++    """
++    records, _, damaged = _scan_log(data)
++    if strict and damaged:
++        raise ValueError("a record fails its checksum or is cut short")
++    return records
 +
 +
 +def encode_log_records(payload: bytes, offset: int) -> bytes:
@@ -1184,7 +1272,11 @@ index 0000000000000000000000000000000000000000..b264fb35316fd157471317071492ee78
 +def _read_manifest(data: bytes) -> _Version:
 +    version = _Version()
 +    tables: set[int] = set()
-+    for record in log_records(data):
++    try:
++        records = log_records(data, strict=True)
++    except ValueError as exc:
++        raise ValueError(f"the MANIFEST is damaged: {exc}") from exc
++    for record in records:
 +        pos = 0
 +        while pos < len(record):
 +            tag, pos = _varint(record, pos)
@@ -1252,16 +1344,35 @@ index 0000000000000000000000000000000000000000..b264fb35316fd157471317071492ee78
 +    raise FileNotFoundError(f"table {number:06d} is missing from {directory}")
 +
 +
++def _layout(directory: Path) -> tuple:
++    """What tells one version of the database from the next: which
++    MANIFEST is current, how long it is, and which tables and logs exist.
++    Appending to the live log changes none of these; moving a log into a
++    table changes all three."""
++    current = (directory / "CURRENT").read_text(encoding="ascii").strip()
++    return (
++        current,
++        (directory / current).stat().st_size,
++        frozenset(
++            path.name for path in directory.iterdir()
++            if path.suffix in (".log", ".ldb", ".sst")
++        ),
++    )
++
++
 +def read_db(directory: Path) -> Snapshot:
 +    """Read every key's newest value from the database in ``directory``.
 +
 +    Raises:
-+        LevelDBError: the directory holds no database, or a file in it does
-+            not parse. A database being written by another process can fail
-+            this way between two of its own file operations; reading again
-+            succeeds.
++        LevelDBError: the directory holds no database, a file in it does
++            not parse, or its files changed during the read. A database
++            another process is writing can fail in each of these ways
++            between two of that process's own file operations (it moves a
++            log into a new table and extends the MANIFEST as it goes);
++            reading again succeeds.
 +    """
 +    try:
++        before = _layout(directory)
 +        current = (directory / "CURRENT").read_text(encoding="ascii").strip()
 +        version = _read_manifest((directory / current).read_bytes())
 +        newest: dict[bytes, tuple[int, bytes | None]] = {}
@@ -1289,6 +1400,8 @@ index 0000000000000000000000000000000000000000..b264fb35316fd157471317071492ee78
 +                for sequence, key, value in _batch_entries(record):
 +                    see(sequence, key, value)
 +                    last_sequence = max(last_sequence, sequence)
++        if _layout(directory) != before:
++            raise ValueError("its files changed while they were being read")
 +    except (OSError, ValueError, IndexError, struct.error) as exc:
 +        raise LevelDBError(f"could not read the LevelDB database in {directory}: {exc}") from exc
 +    return Snapshot(
@@ -1318,7 +1431,7 @@ index 0000000000000000000000000000000000000000..b264fb35316fd157471317071492ee78
 +        raise LevelDBError(f"the LevelDB database in {directory} has no write-ahead log")
 +    try:
 +        data = log.read_bytes()
-+        _, clean_end = _scan_log(data)
++        _, clean_end, _ = _scan_log(data)
 +        padding = b""
 +        if clean_end != len(data) and len(data) % BLOCK_SIZE:
 +            padding = b"\x00" * (BLOCK_SIZE - len(data) % BLOCK_SIZE)
@@ -1340,10 +1453,13 @@ index 0000000000000000000000000000000000000000..b264fb35316fd157471317071492ee78
 +def locked(directory: Path) -> Iterator[None]:
 +    """Hold the database's ``LOCK`` file the way LevelDB does.
 +
-+    LevelDB takes an exclusive advisory lock on ``LOCK`` for as long as it
-+    has the database open, so failing to take it here means a process is
-+    using the database. On Windows LevelDB holds the file open without
-+    sharing instead; opening it for writing fails the same way there.
++    LevelDB takes an exclusive lock on ``LOCK`` for as long as it has the
++    database open, so failing to take it here means a process is using the
++    database, and holding it keeps a second writer out. On POSIX that is an
++    ``fcntl`` record lock; on Windows a byte-range lock (``LockFile`` in
++    LevelDB's own environment, ``LockFileEx`` in Chromium's), which the
++    one-byte lock ``msvcrt.locking`` takes at the start of the file
++    conflicts with.
 +
 +    The POSIX lock belongs to the process, not to the descriptor: it is
 +    gone as soon as this process closes any other descriptor of ``LOCK``.
@@ -1361,15 +1477,20 @@ index 0000000000000000000000000000000000000000..b264fb35316fd157471317071492ee78
 +            f"the LevelDB database in {directory} is in use by another process ({exc})"
 +        ) from exc
 +    try:
-+        if sys.platform != "win32":
-+            import fcntl
++        try:
++            if sys.platform == "win32":
++                import msvcrt
 +
-+            try:
++                handle.seek(0)
++                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
++            else:
++                import fcntl
++
 +                fcntl.lockf(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-+            except OSError as exc:
-+                raise LevelDBError(
-+                    f"the LevelDB database in {directory} is in use by another process"
-+                ) from exc
++        except OSError as exc:
++            raise LevelDBError(
++                f"the LevelDB database in {directory} is in use by another process"
++            ) from exc
 +        yield
 +    finally:
 +        handle.close()
@@ -1505,10 +1626,10 @@ index db51e0a7bc8de911035fe6985a9eec6cf45ffc71..b71c7ad9571eebfdc7ee7820fc33d28e
          # An unset weekly line reports null, not the threshold it falls back
 diff --git a/tests/test_desktop_envs.py b/tests/test_desktop_envs.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..22c1608753afd5338e1da2ee6fa2b251917d50e1
+index 0000000000000000000000000000000000000000..66f91745577dd603951d97071005e09d9de60094
 --- /dev/null
 +++ b/tests/test_desktop_envs.py
-@@ -0,0 +1,581 @@
+@@ -0,0 +1,718 @@
 +"""``cswap desktop --sync-envs``: one account's Code tab environments
 +replace another's.
 +
@@ -1524,11 +1645,13 @@ index 0000000000000000000000000000000000000000..22c1608753afd5338e1da2ee6fa2b251
 +
 +import base64
 +import json
++import os
 +import re
 +import subprocess
 +import sys
 +from pathlib import Path
-+from unittest.mock import patch
++from contextlib import contextmanager
++from unittest.mock import MagicMock, patch
 +
 +import pytest
 +
@@ -1725,7 +1848,6 @@ index 0000000000000000000000000000000000000000..22c1608753afd5338e1da2ee6fa2b251
 +        assert _entries(own)[store_key("uuid-2")] == _store("mine too")
 +        assert "open on the stock profile" in _plain(capsys.readouterr().err)
 +
-+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX advisory lock")
 +    def test_the_database_lock_is_held_while_the_profile_is_written(self, manager):
 +        """A POSIX lock goes when the process closes any descriptor of the
 +        file, so nothing between taking it and the write may open ``LOCK``."""
@@ -1737,17 +1859,18 @@ index 0000000000000000000000000000000000000000..22c1608753afd5338e1da2ee6fa2b251
 +            probe = subprocess.run(
 +                [
 +                    sys.executable, "-c",
-+                    "import fcntl, sys\n"
-+                    "f = open(sys.argv[1], 'r+b')\n"
++                    "import sys\n"
++                    "from pathlib import Path\n"
++                    "from claude_swap import leveldb\n"
 +                    "try:\n"
-+                    "    fcntl.lockf(f, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
-+                    "except OSError:\n"
-+                    "    print('held')\n"
-+                    "else:\n"
-+                    "    print('free')\n",
-+                    str(directory / "LOCK"),
++                    "    with leveldb.locked(Path(sys.argv[1])):\n"
++                    "        print('free')\n"
++                    "except leveldb.LevelDBError:\n"
++                    "    print('held')\n",
++                    str(directory),
 +                ],
 +                capture_output=True, text=True,
++                env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
 +            )
 +            seen.append(probe.stdout.strip())
 +            real_put(directory, key, value)
@@ -1755,6 +1878,54 @@ index 0000000000000000000000000000000000000000..22c1608753afd5338e1da2ee6fa2b251
 +        with patch.object(leveldb, "put", side_effect=put_while_probed):
 +            assert manager.sync_envs(["2"], source="1") == 0
 +        assert seen == ["held"]
++
++    def test_a_stock_profile_that_changed_hands_is_left_alone(
++        self, manager, stock, capsys
++    ):
++        """The stock app can run as another account between the check and
++        the write; its lock is free again by then."""
++        _sign_stock_in(stock, "uuid-2")
++        _profile(stock, {"uuid-2": _store("mine")})
++        real_locked = leveldb.locked
++
++        @contextmanager
++        def locked_after_a_relogin(directory):
++            _sign_stock_in(stock, "uuid-3")
++            with real_locked(directory):
++                yield
++
++        with patch.object(leveldb, "locked", side_effect=locked_after_a_relogin):
++            assert manager.sync_envs(["2"], source="1") == 1
++        assert _entries(stock)[store_key("uuid-2")] == _store("mine")
++        assert "no longer signed in as this account" in _plain(capsys.readouterr().err)
++
++    def test_a_profile_synced_before_a_later_one_failed_is_reported(
++        self, manager, stock, capsys
++    ):
++        _sign_stock_in(stock, "uuid-2")
++        _profile(stock, {"uuid-2": _store("mine")})
++        own = _profile(_own(manager, "2"), {"uuid-2": _store("mine too")})
++        real_locked = leveldb.locked
++
++        @contextmanager
++        def own_profile_in_use(directory):
++            if directory == leveldb_dir(own):
++                raise leveldb.LevelDBError("in use by another process")
++            with real_locked(directory):
++                yield
++
++        with patch.object(leveldb, "locked", side_effect=own_profile_in_use):
++            assert manager.sync_envs(["2"], source="1") == 1
++        assert _entries(stock)[store_key("uuid-2")] == _store("a")
++        assert _entries(own)[store_key("uuid-2")] == _store("mine too")
++        captured = capsys.readouterr()
++        assert (
++            "profile 2-account2_example.com: in use by another process; "
++            "nothing was changed"
++        ) in _plain(captured.err)
++        out = _plain(captured.out)
++        assert "the stock profile was already synced" in out
++        assert f"{TWO} synced" not in out
 +
 +    def test_a_database_in_use_changes_nothing(self, manager, capsys):
 +        two = _profile(_own(manager, "2"), {"uuid-2": _store("mine")})
@@ -1793,6 +1964,31 @@ index 0000000000000000000000000000000000000000..22c1608753afd5338e1da2ee6fa2b251
 +        set_setting(manager.switcher.backup_dir, "desktop.envSource", "gone")
 +        with pytest.raises(ConfigError, match="desktop.envSource gone: account not found"):
 +            manager.sync_envs(["2"])
++
++    def test_an_empty_from_is_not_the_setting(self, manager):
++        set_setting(manager.switcher.backup_dir, "desktop.envSource", "1")
++        _profile(_own(manager, "1"), {"uuid-1": _store("a")})
++        two = _profile(_own(manager, "2"), {"uuid-2": _store("mine")})
++        with pytest.raises(ConfigError, match="--from needs an account"):
++            manager.sync_envs(["2"], source="")
++        assert _entries(two)[store_key("uuid-2")] == _store("mine")
++
++    def test_a_source_changing_under_the_read_is_read_again(self, manager):
++        _profile(_own(manager, "1"), {"uuid-1": _store("a")})
++        two = _profile(_own(manager, "2"), {})
++        real = leveldb.read_db
++        calls = []
++
++        def first_read_races(directory):
++            calls.append(directory)
++            if len(calls) == 1:
++                raise leveldb.LevelDBError("its files changed while they were being read")
++            return real(directory)
++
++        with patch.object(leveldb, "read_db", side_effect=first_read_races), \
++             patch.object(desktop_envs.time, "sleep"):
++            assert manager.sync_envs(["2"], source="1") == 0
++        assert _entries(two)[store_key("uuid-2")] == _store("a")
 +
 +    def test_a_source_with_nothing_to_copy_is_an_error(self, manager):
 +        _profile(_own(manager, "1"), {})
@@ -1846,6 +2042,39 @@ index 0000000000000000000000000000000000000000..22c1608753afd5338e1da2ee6fa2b251
 +            manager.sync_envs(["2"], source="1")
 +        assert _entries(two)[store_key("uuid-2")] == _store("mine")
 +
++    def test_unreadable_target_ssh_connections_are_not_replaced(self, manager, capsys):
++        one = _profile(_own(manager, "1"), {"uuid-1": _store("a")})
++        two = _profile(_own(manager, "2"), {"uuid-2": _store("mine")})
++        (one / SSH_FILE).write_text('{"configs": [{"id": "box"}]}')
++        (two / SSH_FILE).write_text('{"configs": [{"id": "mine"},]}')
++        assert manager.sync_envs(["2"], source="1") == 1
++        assert (two / SSH_FILE).read_text() == '{"configs": [{"id": "mine"},]}'
++        assert _entries(two)[store_key("uuid-2")] == _store("mine")
++        assert not (manager.switcher.backup_dir / "history-conflicts").exists()
++        err = _plain(capsys.readouterr().err)
++        assert "ssh_configs.json is not readable JSON" in err and "Nothing was changed" in err
++
++    def test_a_connection_without_a_usable_id_is_kept_not_fatal(self, manager):
++        one = _profile(_own(manager, "1"), {"uuid-1": _store("a")})
++        two = _profile(_own(manager, "2"), {})
++        (one / SSH_FILE).write_text('{"configs": [{"id": ["odd"]}, {"id": "box", "v": 2}]}')
++        (two / SSH_FILE).write_text('{"configs": [{"id": ["odd"]}, {"id": "box", "v": 1}, "x"]}')
++        assert manager.sync_envs(["2"], source="1") == 0
++        assert json.loads((two / SSH_FILE).read_text())["configs"] == [
++            {"id": ["odd"]}, {"id": "box", "v": 2}, {"id": ["odd"]}, "x",
++        ]
++
++    def test_an_unreadable_variable_file_is_left_with_a_warning(self, manager, capsys):
++        _profile(_own(manager, "1"), {"uuid-1": _store("a")})
++        two = _profile(_own(manager, "2"), {})
++        (two / ENV_FILE).write_text("{ torn")
++        assert manager.sync_envs(["2"], source="1") == 1
++        assert (two / ENV_FILE).read_text() == "{ torn"
++        assert _entries(two)[store_key("uuid-2")] == _store("a")
++        out = _plain(capsys.readouterr().out)
++        assert "its environment variables were left as they were" in out
++        assert "is not readable JSON" in out
++
 +    def test_a_source_without_ssh_connections_leaves_the_targets(self, manager):
 +        _profile(_own(manager, "1"), {"uuid-1": _store("a")})
 +        two = _profile(_own(manager, "2"), {})
@@ -1878,6 +2107,34 @@ index 0000000000000000000000000000000000000000..22c1608753afd5338e1da2ee6fa2b251
 +        for _ in range(5):
 +            assert manager.sync_envs(["2"], source="1") == 0
 +        assert len(self._runs(manager)) == desktop_envs.BACKUPS_KEPT
++
++    def test_the_run_just_taken_survives_pruning(self, manager, capsys):
++        """Runs in one second differ only in the random part of the name,
++        which says nothing about their order."""
++        suffixes = iter(MagicMock(hex=f"{9 - i}0000000") for i in range(5))
++        with patch.object(desktop_envs.time, "strftime", return_value="20260101T000000"), \
++             patch.object(desktop_envs.uuid, "uuid4", side_effect=lambda: next(suffixes)):
++            for _ in range(5):
++                capsys.readouterr()
++                assert manager.sync_envs(["2"], source="1") == 0
++                kept = re.search(r"kept under (\S+)", _plain(capsys.readouterr().out)).group(1)
++                assert Path(kept).is_dir()
++        assert len(self._runs(manager)) == desktop_envs.BACKUPS_KEPT
++
++    def test_ctrl_c_puts_the_profile_back(self, manager):
++        before = {
++            path.relative_to(self.two): path.read_bytes()
++            for path in sorted(self.two.rglob("*")) if path.is_file()
++        }
++        with patch.object(desktop_envs, "_write_json", side_effect=KeyboardInterrupt):
++            with pytest.raises(KeyboardInterrupt):
++                manager.sync_envs(["2"], source="1")
++        after = {
++            path.relative_to(self.two): path.read_bytes()
++            for path in sorted(self.two.rglob("*")) if path.is_file()
++        }
++        assert after == before
++        assert self._runs(manager) == []
 +
 +    def test_a_failed_step_puts_the_profile_back(self, manager, capsys):
 +        before = {
@@ -2078,6 +2335,7 @@ index 0000000000000000000000000000000000000000..22c1608753afd5338e1da2ee6fa2b251
 +        (["--sync-envs"], "--sync-envs needs an account or --all"),
 +        (["--sync-envs", "--quit", "2"], "--quit and --sync-envs are exclusive"),
 +        (["2", "--from", "1"], "--from only applies to --sync-envs"),
++        (["2", "--from", ""], "--from only applies to --sync-envs"),
 +    ])
 +    def test_usage_errors(self, temp_home, capsys, argv, message):
 +        with pytest.raises(SystemExit) as exc:
@@ -2092,10 +2350,10 @@ index 0000000000000000000000000000000000000000..22c1608753afd5338e1da2ee6fa2b251
 +        assert "desktop --sync-envs <num|email> --from <num|email>" in capsys.readouterr().out
 diff --git a/tests/test_leveldb.py b/tests/test_leveldb.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..600197124dc8b2bcdbb22190ec63e398b3d97f24
+index 0000000000000000000000000000000000000000..b8eee0eaadb2c54c722bb2288d6f72a645a7afc9
 --- /dev/null
 +++ b/tests/test_leveldb.py
-@@ -0,0 +1,318 @@
+@@ -0,0 +1,381 @@
 +"""``leveldb.py``: reading a LevelDB database and appending one write.
 +
 +The fixtures are built here byte by byte from LevelDB's documented formats
@@ -2106,10 +2364,13 @@ index 0000000000000000000000000000000000000000..600197124dc8b2bcdbb22190ec63e398
 +
 +from __future__ import annotations
 +
++import os
 +import struct
 +import subprocess
 +import sys
 +from pathlib import Path
++
++from unittest.mock import patch
 +
 +import pytest
 +
@@ -2343,6 +2604,38 @@ index 0000000000000000000000000000000000000000..600197124dc8b2bcdbb22190ec63e398
 +            leveldb.read_db(db)
 +
 +
++class TestConsistency:
++    def test_a_damaged_manifest_is_an_error_not_an_older_table_set(self, tmp_path):
++        added = encode_varint(4) + encode_varint(9)  # a later edit
++        db = build_db(tmp_path / "db", batches=[], extra_edits=[added])
++        manifest = bytearray((db / "MANIFEST-000001").read_bytes())
++        manifest[-1] ^= 0xFF
++        (db / "MANIFEST-000001").write_bytes(bytes(manifest))
++        with pytest.raises(LevelDBError, match="the MANIFEST is damaged"):
++            leveldb.read_db(db)
++
++    def test_zero_padding_in_a_manifest_is_not_damage(self, tmp_path):
++        db = build_db(tmp_path / "db", batches=[_batch(1, [(b"k", b"v")])])
++        with open(db / "MANIFEST-000001", "ab") as handle:
++            handle.write(b"\x00" * 64)
++        assert leveldb.read_db(db).entries == {b"k": b"v"}
++
++    def test_files_changing_under_the_read_are_an_error(self, tmp_path):
++        """A running database moves its log into a new table between two
++        of the reader's steps; the read then saw neither."""
++        db = build_db(tmp_path / "db", batches=[_batch(1, [(b"k", b"v")])])
++        real = leveldb._read_manifest
++
++        def manifest_then_compaction(data):
++            version = real(data)
++            (db / "000009.ldb").write_bytes(b"")
++            return version
++
++        with patch.object(leveldb, "_read_manifest", side_effect=manifest_then_compaction):
++            with pytest.raises(LevelDBError, match="changed while they were being read"):
++                leveldb.read_db(db)
++
++
 +class TestPut:
 +    def test_the_write_outranks_everything_before_it(self, tmp_path):
 +        db = build_db(
@@ -2404,6 +2697,34 @@ index 0000000000000000000000000000000000000000..600197124dc8b2bcdbb22190ec63e398
 +                str(db / "LOCK"),
 +            ],
 +            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
++        )
++        try:
++            assert holder.stdout.readline().strip() == "held"
++            with pytest.raises(LevelDBError, match="in use by another process"):
++                with leveldb.locked(db):
++                    pass
++        finally:
++            holder.communicate("")
++        with leveldb.locked(db):
++            pass
++
++    def test_a_second_cswap_is_refused_until_the_first_is_done(self, tmp_path):
++        """Two syncs of one profile must not both append at the same
++        sequence number; the lock is real on every platform."""
++        db = build_db(tmp_path / "db", batches=[])
++        holder = subprocess.Popen(
++            [
++                sys.executable, "-c",
++                "import sys\n"
++                "from pathlib import Path\n"
++                "from claude_swap import leveldb\n"
++                "with leveldb.locked(Path(sys.argv[1])):\n"
++                "    print('held', flush=True)\n"
++                "    sys.stdin.read()\n",
++                str(db),
++            ],
++            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
++            env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
 +        )
 +        try:
 +            assert holder.stdout.readline().strip() == "held"

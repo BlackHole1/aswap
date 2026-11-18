@@ -48,7 +48,7 @@ Claude Desktop은 한 번에 하나의 로그인만 유지합니다. `cswap desk
 
 <img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
-`cswap desktop --sync-envs 2 --from 1`은 계정 2의 Code 탭 환경을 계정 1의 사본으로 교체합니다. 로컬 및 SSH 환경과 그 설정, 그리고 macOS에서는 환경 변수까지 포함됩니다. 먼저 계정 2의 창을 닫으세요. 이전 상태는 백업 디렉터리에 보관됩니다.
+`cswap desktop --sync-envs 2 --from 1`은 계정 2의 Code 탭 환경을 계정 1의 사본으로 교체합니다. 로컬 및 SSH 환경과 그 설정, 그리고 macOS에서는 환경 변수까지 포함됩니다. 먼저 계정 2로 로그인된 Claude Desktop을 모두 종료하세요. 전용 창은 물론, 일반 앱이 계정 2로 로그인되어 있다면 그것도 종료해야 합니다. 이전 상태는 백업 디렉터리에 보관됩니다.
 
 ### 계정별 Chrome 프로필
 

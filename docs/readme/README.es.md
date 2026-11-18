@@ -48,7 +48,7 @@ Claude Desktop solo admite un inicio de sesión a la vez. `cswap desktop 2` abre
 
 <img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
-`cswap desktop --sync-envs 2 --from 1` reemplaza los entornos de la pestaña Code de la cuenta 2 por una copia de los de la cuenta 1: entornos locales y SSH, su configuración y, en macOS, sus variables de entorno. Cierra antes la ventana de la cuenta 2. El estado anterior se conserva en el directorio de copias de seguridad.
+`cswap desktop --sync-envs 2 --from 1` reemplaza los entornos de la pestaña Code de la cuenta 2 por una copia de los de la cuenta 1: entornos locales y SSH, su configuración y, en macOS, sus variables de entorno. Cierra antes todas las instancias de Claude Desktop con la sesión de la cuenta 2: su propia ventana y también la aplicación normal si tiene iniciada esa cuenta. El estado anterior se conserva en el directorio de copias de seguridad.
 
 ### Un perfil de Chrome por cuenta
 

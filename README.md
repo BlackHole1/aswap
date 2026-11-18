@@ -48,7 +48,7 @@ Claude Desktop holds one login at a time. `cswap desktop 2` opens account 2 in i
 
 <img src="docs/images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
-`cswap desktop --sync-envs 2 --from 1` replaces account 2's Code tab environments with a copy of account 1's: local and SSH environments, their settings, and on macOS their environment variables. Close account 2's window first. The previous state is kept in the backup directory.
+`cswap desktop --sync-envs 2 --from 1` replaces account 2's Code tab environments with a copy of account 1's: local and SSH environments, their settings, and on macOS their environment variables. Quit every Claude Desktop signed in as account 2 first: its own window, and the regular app too if that is signed in as account 2. The previous state is kept in the backup directory.
 
 ### One Chrome profile per account
 

@@ -48,7 +48,7 @@ Claude Desktop が保持できるログインは一度に 1 つだけです。`c
 
 <img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
-`cswap desktop --sync-envs 2 --from 1` は、アカウント 2 の Code タブの環境をアカウント 1 のコピーで置き換えます。対象はローカル環境と SSH 環境、その設定、そして macOS では環境変数です。先にアカウント 2 のウィンドウを閉じてください。以前の状態はバックアップディレクトリに残ります。
+`cswap desktop --sync-envs 2 --from 1` は、アカウント 2 の Code タブの環境をアカウント 1 のコピーで置き換えます。対象はローカル環境と SSH 環境、その設定、そして macOS では環境変数です。先に、アカウント 2 でログインしている Claude Desktop をすべて終了してください。専用ウィンドウに加え、通常のアプリがアカウント 2 でログインしている場合はそれも対象です。以前の状態はバックアップディレクトリに残ります。
 
 ### アカウントごとに Chrome プロファイルを分ける
 
