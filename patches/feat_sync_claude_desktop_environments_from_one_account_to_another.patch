@@ -189,7 +189,7 @@ index cd1bfce3dff283eae95d8617c126d1d49e5f40a5..e5405bda4b4bda19f346446eb38148f9
      def sync_shared_state(self, data_dir: Path) -> None:
 diff --git a/src/claude_swap/desktop_envs.py b/src/claude_swap/desktop_envs.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..2efd86869b94150f04aaa267c6c4c5f2304048ad
+index 0000000000000000000000000000000000000000..f7a1f456288fcc19be53b15ec97e28eceb379a0b
 --- /dev/null
 +++ b/src/claude_swap/desktop_envs.py
 @@ -0,0 +1,740 @@
@@ -564,12 +564,12 @@ index 0000000000000000000000000000000000000000..2efd86869b94150f04aaa267c6c4c5f2
 +
 +
 +def _run_name() -> str:
-+    """A backup run's directory name: its time to the nanosecond, so names
-+    sort by age even within one second, then a random part so two runs can
-+    never share one."""
++    """A backup run's directory name: its time in UTC to the nanosecond, so
++    names sort by age within one second and across a clock change for
++    daylight saving, then a random part so two runs can never share one."""
 +    now = time.time_ns()
-+    stamp = time.strftime("%Y%m%dT%H%M%S", time.localtime(now // 10**9))
-+    return f"{stamp}.{now % 10**9:09d}-{uuid.uuid4().hex[:8]}"
++    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime(now // 10**9))
++    return f"{stamp}.{now % 10**9:09d}Z-{uuid.uuid4().hex[:8]}"
 +
 +
 +def _prune_backups(parent: Path, current: Path) -> None:
@@ -935,10 +935,10 @@ index 0000000000000000000000000000000000000000..2efd86869b94150f04aaa267c6c4c5f2
 +    return 1 if failed else 0
 diff --git a/src/claude_swap/leveldb.py b/src/claude_swap/leveldb.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..7752406d65e5dfe3f3aa7b2abe5aa779e2bf01a8
+index 0000000000000000000000000000000000000000..6bc32ba76c73bf212916139938cd29ea883e0b61
 --- /dev/null
 +++ b/src/claude_swap/leveldb.py
-@@ -0,0 +1,562 @@
+@@ -0,0 +1,565 @@
 +"""Read a LevelDB database and add one entry to it, without a dependency.
 +
 +Chromium keeps a profile's ``localStorage`` in a LevelDB database, and
@@ -1045,8 +1045,9 @@ index 0000000000000000000000000000000000000000..7752406d65e5dfe3f3aa7b2abe5aa779
 +
 +    A record that fails its checksum or runs past its block drops the rest
 +    of that block, as LevelDB's reader does: a write torn by a crash costs
-+    its own block and nothing after it. Zero bytes are padding, not damage;
-+    a record whose first pieces have no last one, or the reverse, is.
++    its own block and nothing after it. Zero bytes are padding, not damage.
++    A record whose first pieces never reach a last one is, whatever cuts it
++    short, and so is a middle or last piece with nothing before it.
 +    """
 +    records: list[bytes] = []
 +    pending: bytearray | None = None
@@ -1069,17 +1070,19 @@ index 0000000000000000000000000000000000000000..7752406d65e5dfe3f3aa7b2abe5aa779
 +            and _masked(crc32c(data[pos + 6:end])) == checksum
 +        )
 +        if not intact:
-+            damaged = damaged or any(data[pos:pos + _HEADER_SIZE])
++            damaged = damaged or pending is not None or any(data[pos:pos + _HEADER_SIZE])
 +            pos += left
 +            pending = None
 +            continue
 +        payload = data[start:end]
 +        pos = clean_end = end
-+        if kind == _FULL:
++        if kind in (_FULL, _FIRST):
++            damaged = damaged or pending is not None  # the one before never ended
 +            pending = None
-+            records.append(payload)
-+        elif kind == _FIRST:
-+            pending = bytearray(payload)
++            if kind == _FULL:
++                records.append(payload)
++            else:
++                pending = bytearray(payload)
 +        elif pending is not None:
 +            pending += payload
 +            if kind == _LAST:
@@ -1633,10 +1636,10 @@ index db51e0a7bc8de911035fe6985a9eec6cf45ffc71..b71c7ad9571eebfdc7ee7820fc33d28e
          # An unset weekly line reports null, not the threshold it falls back
 diff --git a/tests/test_desktop_envs.py b/tests/test_desktop_envs.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..f5bcd63acc7c6de7d427b947fe909390d1ac820a
+index 0000000000000000000000000000000000000000..73a1091a3202d391b31a60f5d713af4839a72fe8
 --- /dev/null
 +++ b/tests/test_desktop_envs.py
-@@ -0,0 +1,723 @@
+@@ -0,0 +1,748 @@
 +"""``cswap desktop --sync-envs``: one account's Code tab environments
 +replace another's.
 +
@@ -1651,11 +1654,13 @@ index 0000000000000000000000000000000000000000..f5bcd63acc7c6de7d427b947fe909390
 +from __future__ import annotations
 +
 +import base64
++import calendar
 +import json
 +import os
 +import re
 +import subprocess
 +import sys
++import time
 +from pathlib import Path
 +from contextlib import contextmanager
 +from unittest.mock import MagicMock, patch
@@ -2133,6 +2138,29 @@ index 0000000000000000000000000000000000000000..f5bcd63acc7c6de7d427b947fe909390
 +                    os.utime(run, ns=(10**18, 10**18))
 +        assert self._runs(manager) == taken[-desktop_envs.BACKUPS_KEPT:]
 +
++    @pytest.mark.skipif(not hasattr(time, "tzset"), reason="needs a settable time zone")
++    def test_the_newest_runs_survive_the_end_of_daylight_saving(self, manager, capsys, monkeypatch):
++        """01:59 on the local clock, then 01:00 again an hour of names
++        later: the runs after the change are still the newest."""
++        monkeypatch.setenv("TZ", "EST5EDT,M3.2.0,M11.1.0")
++        time.tzset()
++        try:
++            change = calendar.timegm((2026, 11, 1, 6, 0, 0))
++            assert time.localtime(change - 1)[3:6] == (1, 59, 59)
++            assert time.localtime(change)[3:6] == (1, 0, 0)
++            clock = iter((change - 2 + i) * 10**9 for i in range(5))
++            taken = []
++            with patch.object(desktop_envs.time, "time_ns", side_effect=lambda: next(clock)):
++                for _ in range(5):
++                    capsys.readouterr()
++                    assert manager.sync_envs(["2"], source="1") == 0
++                    kept = re.search(r"kept under (\S+)", _plain(capsys.readouterr().out)).group(1)
++                    taken.append(Path(kept))
++        finally:
++            monkeypatch.undo()
++            time.tzset()
++        assert self._runs(manager) == taken[-desktop_envs.BACKUPS_KEPT:]
++
 +    def test_ctrl_c_puts_the_profile_back(self, manager):
 +        before = {
 +            path.relative_to(self.two): path.read_bytes()
@@ -2362,10 +2390,10 @@ index 0000000000000000000000000000000000000000..f5bcd63acc7c6de7d427b947fe909390
 +        assert "desktop --sync-envs <num|email> --from <num|email>" in capsys.readouterr().out
 diff --git a/tests/test_leveldb.py b/tests/test_leveldb.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..d7bfa342c1378795d6476f1b21ad60ea8acd0f7c
+index 0000000000000000000000000000000000000000..0d9e6101b576af1f7cc833d8aefa990eca21fd56
 --- /dev/null
 +++ b/tests/test_leveldb.py
-@@ -0,0 +1,399 @@
+@@ -0,0 +1,412 @@
 +"""``leveldb.py``: reading a LevelDB database and appending one write.
 +
 +The fixtures are built here byte by byte from LevelDB's documented formats
@@ -2626,10 +2654,17 @@ index 0000000000000000000000000000000000000000..d7bfa342c1378795d6476f1b21ad60ea
 +        with pytest.raises(LevelDBError, match="the MANIFEST is damaged"):
 +            leveldb.read_db(db)
 +
-+    @pytest.mark.parametrize("keep", ["first piece only", "last piece only"])
++    @pytest.mark.parametrize("keep", [
++        "first piece only",
++        "first piece, then zeros",
++        "first piece, then a whole edit",
++        "first piece, then another split edit",
++        "last piece only",
++    ])
 +    def test_a_manifest_edit_missing_a_piece_is_damage(self, tmp_path, keep):
 +        """An edit split over two blocks, with one of its two physical
-+        records gone: every checksum left in the file is still good."""
++        records gone, whatever takes its place: every checksum left in the
++        file is still good."""
 +        db = build_db(tmp_path / "db", batches=[])
 +        base = (db / "MANIFEST-000001").read_bytes()
 +        edits = leveldb.log_records(base, strict=True)
@@ -2638,6 +2673,12 @@ index 0000000000000000000000000000000000000000..d7bfa342c1378795d6476f1b21ad60ea
 +        assert len(leveldb.log_records(whole, strict=True)) == len(edits) + 1
 +        if keep == "first piece only":
 +            torn = whole[:32768]
++        elif keep == "first piece, then zeros":
++            torn = whole[:32768] + b"\x00" * 64
++        elif keep == "first piece, then a whole edit":
++            torn = whole[:32768] + _log(edits)
++        elif keep == "first piece, then another split edit":
++            torn = whole[:32768] + _log([b"y" * 32768])
 +        else:
 +            torn = base + b"\x00" * (32768 - len(base)) + whole[32768:]
 +        (db / "MANIFEST-000001").write_bytes(torn)
