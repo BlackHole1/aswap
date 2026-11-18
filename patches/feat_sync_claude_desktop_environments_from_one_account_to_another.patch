@@ -189,10 +189,10 @@ index cd1bfce3dff283eae95d8617c126d1d49e5f40a5..e5405bda4b4bda19f346446eb38148f9
      def sync_shared_state(self, data_dir: Path) -> None:
 diff --git a/src/claude_swap/desktop_envs.py b/src/claude_swap/desktop_envs.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..d5f715f104852d3c97abd4e38eb8427aaa09af44
+index 0000000000000000000000000000000000000000..5a99595dc3dd03fcf1c95efeffcccc130129b394
 --- /dev/null
 +++ b/src/claude_swap/desktop_envs.py
-@@ -0,0 +1,646 @@
+@@ -0,0 +1,663 @@
 +"""Give one account's Claude Desktop the Code tab environments of another.
 +
 +An environment (a named folder or SSH target with its model, effort and
@@ -454,7 +454,10 @@ index 0000000000000000000000000000000000000000..d5f715f104852d3c97abd4e38eb8427a
 +    files as it works, so a failed read is tried again.
 +
 +    Raises:
-+        SessionError: the database stayed unreadable.
++        SessionError: the database stayed unreadable, or the profile's SSH
++            connections exist but do not read: copying SSH environments
++            without the connections they name would leave them pointing
++            nowhere.
 +    """
 +    directory = leveldb_dir(data_dir)
 +    for attempt in range(SOURCE_READ_ATTEMPTS):
@@ -467,6 +470,13 @@ index 0000000000000000000000000000000000000000..d5f715f104852d3c97abd4e38eb8427a
 +            time.sleep(0.3)
 +    if store is None:
 +        return None, None
++
++    ssh = _read_json(data_dir / SSH_FILE)
++    if ssh is None and (data_dir / SSH_FILE).exists():
++        raise SessionError(
++            f"{data_dir / SSH_FILE} is not readable JSON, so the SSH connections "
++            "its environments use cannot be copied; fix or remove it, then retry"
++        )
 +
 +    mirror_file = _read_json(data_dir / MIRROR_FILE) or {}
 +    buckets = mirror_file.get("byAccount")
@@ -498,7 +508,7 @@ index 0000000000000000000000000000000000000000..d5f715f104852d3c97abd4e38eb8427a
 +    return Environments(
 +        store=store,
 +        mirror=mirror if isinstance(mirror, dict) else None,
-+        ssh=_read_json(data_dir / SSH_FILE),
++        ssh=ssh,
 +        global_env=global_env,
 +        scoped_env=scoped_env,
 +        count=count_environments(store),
@@ -517,8 +527,15 @@ index 0000000000000000000000000000000000000000..d5f715f104852d3c97abd4e38eb8427a
 +    had: dict[str, bool] = field(default_factory=dict)
 +
 +    def take(self) -> None:
++        """Copy the profile's state aside. ``LOCK`` is left out: the caller
++        holds its lock, and reading the file would open and close a second
++        descriptor of it, which drops a POSIX lock (see
++        ``leveldb.locked``)."""
 +        desktop.DesktopManager._mkdir_private(self.dest)
-+        shutil.copytree(leveldb_dir(self.data_dir), self.dest / "leveldb")
++        shutil.copytree(
++            leveldb_dir(self.data_dir), self.dest / "leveldb",
++            ignore=shutil.ignore_patterns("LOCK"),
++        )
 +        for name in PROFILE_FILES:
 +            src = self.data_dir / name
 +            self.had[name] = src.is_file()
@@ -527,9 +544,9 @@ index 0000000000000000000000000000000000000000..d5f715f104852d3c97abd4e38eb8427a
 +
 +    def restore(self) -> None:
 +        """Put the copied files back, in place. The caller still holds the
-+        database's ``LOCK`` file open, which Windows will not let anyone
-+        delete or replace, so that one file is left as it is: it has no
-+        content."""
++        database's ``LOCK`` file, which is not in the copy and is left as it
++        is: it has no content, Windows will not let an open file be deleted
++        or replaced, and touching it would drop a POSIX lock."""
 +        live = leveldb_dir(self.data_dir)
 +        saved = {path.name: path for path in (self.dest / "leveldb").iterdir()}
 +        for path in live.iterdir():
@@ -841,10 +858,10 @@ index 0000000000000000000000000000000000000000..d5f715f104852d3c97abd4e38eb8427a
 +    return 1 if failed else 0
 diff --git a/src/claude_swap/leveldb.py b/src/claude_swap/leveldb.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..ddf57eaa3830be86c8b14d13aaebcd89d3854544
+index 0000000000000000000000000000000000000000..b264fb35316fd157471317071492ee78b7bfa456
 --- /dev/null
 +++ b/src/claude_swap/leveldb.py
-@@ -0,0 +1,506 @@
+@@ -0,0 +1,511 @@
 +"""Read a LevelDB database and add one entry to it, without a dependency.
 +
 +Chromium keeps a profile's ``localStorage`` in a LevelDB database, and
@@ -1328,6 +1345,11 @@ index 0000000000000000000000000000000000000000..ddf57eaa3830be86c8b14d13aaebcd89
 +    using the database. On Windows LevelDB holds the file open without
 +    sharing instead; opening it for writing fails the same way there.
 +
++    The POSIX lock belongs to the process, not to the descriptor: it is
++    gone as soon as this process closes any other descriptor of ``LOCK``.
++    Code running under the lock must not open that file, which includes
++    copying the directory with it in.
++
 +    Raises:
 +        LevelDBError: another process has the database open.
 +    """
@@ -1483,10 +1505,10 @@ index db51e0a7bc8de911035fe6985a9eec6cf45ffc71..b71c7ad9571eebfdc7ee7820fc33d28e
          # An unset weekly line reports null, not the threshold it falls back
 diff --git a/tests/test_desktop_envs.py b/tests/test_desktop_envs.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..f361b1360c93806cdf2b5185355585ff3da65c62
+index 0000000000000000000000000000000000000000..22c1608753afd5338e1da2ee6fa2b251917d50e1
 --- /dev/null
 +++ b/tests/test_desktop_envs.py
-@@ -0,0 +1,540 @@
+@@ -0,0 +1,581 @@
 +"""``cswap desktop --sync-envs``: one account's Code tab environments
 +replace another's.
 +
@@ -1503,6 +1525,7 @@ index 0000000000000000000000000000000000000000..f361b1360c93806cdf2b5185355585ff
 +import base64
 +import json
 +import re
++import subprocess
 +import sys
 +from pathlib import Path
 +from unittest.mock import patch
@@ -1702,6 +1725,37 @@ index 0000000000000000000000000000000000000000..f361b1360c93806cdf2b5185355585ff
 +        assert _entries(own)[store_key("uuid-2")] == _store("mine too")
 +        assert "open on the stock profile" in _plain(capsys.readouterr().err)
 +
++    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX advisory lock")
++    def test_the_database_lock_is_held_while_the_profile_is_written(self, manager):
++        """A POSIX lock goes when the process closes any descriptor of the
++        file, so nothing between taking it and the write may open ``LOCK``."""
++        _profile(_own(manager, "2"), {"uuid-2": _store("mine")})
++        real_put = leveldb.put
++        seen = []
++
++        def put_while_probed(directory, key, value):
++            probe = subprocess.run(
++                [
++                    sys.executable, "-c",
++                    "import fcntl, sys\n"
++                    "f = open(sys.argv[1], 'r+b')\n"
++                    "try:\n"
++                    "    fcntl.lockf(f, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
++                    "except OSError:\n"
++                    "    print('held')\n"
++                    "else:\n"
++                    "    print('free')\n",
++                    str(directory / "LOCK"),
++                ],
++                capture_output=True, text=True,
++            )
++            seen.append(probe.stdout.strip())
++            real_put(directory, key, value)
++
++        with patch.object(leveldb, "put", side_effect=put_while_probed):
++            assert manager.sync_envs(["2"], source="1") == 0
++        assert seen == ["held"]
++
 +    def test_a_database_in_use_changes_nothing(self, manager, capsys):
 +        two = _profile(_own(manager, "2"), {"uuid-2": _store("mine")})
 +        with patch.object(
@@ -1784,6 +1838,14 @@ index 0000000000000000000000000000000000000000..f361b1360c93806cdf2b5185355585ff
 +            "trustedHosts": ["new.example", "lab", "m"],
 +        }
 +
++    def test_unreadable_source_ssh_connections_stop_the_sync(self, manager):
++        one = _profile(_own(manager, "1"), {"uuid-1": _store("a")})
++        two = _profile(_own(manager, "2"), {"uuid-2": _store("mine")})
++        (one / SSH_FILE).write_text("{ torn")
++        with pytest.raises(SessionError, match="ssh_configs.json is not readable JSON"):
++            manager.sync_envs(["2"], source="1")
++        assert _entries(two)[store_key("uuid-2")] == _store("mine")
++
 +    def test_a_source_without_ssh_connections_leaves_the_targets(self, manager):
 +        _profile(_own(manager, "1"), {"uuid-1": _store("a")})
 +        two = _profile(_own(manager, "2"), {})
@@ -1809,6 +1871,7 @@ index 0000000000000000000000000000000000000000..f361b1360c93806cdf2b5185355585ff
 +        assert manager.sync_envs(["2"], source="1") == 0
 +        (run,) = self._runs(manager)
 +        assert leveldb.read_db(run / "leveldb").get(store_key("uuid-2")) == _store("mine")
++        assert not (run / "leveldb" / "LOCK").exists()
 +        assert (run / SSH_FILE).read_text() == '{"configs": []}'
 +
 +    def test_only_the_newest_runs_are_kept(self, manager):
