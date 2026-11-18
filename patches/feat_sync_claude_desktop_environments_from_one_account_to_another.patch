@@ -189,10 +189,10 @@ index cd1bfce3dff283eae95d8617c126d1d49e5f40a5..e5405bda4b4bda19f346446eb38148f9
      def sync_shared_state(self, data_dir: Path) -> None:
 diff --git a/src/claude_swap/desktop_envs.py b/src/claude_swap/desktop_envs.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..1051e5feaae7b65252aad0704ce90822338a2ae8
+index 0000000000000000000000000000000000000000..2efd86869b94150f04aaa267c6c4c5f2304048ad
 --- /dev/null
 +++ b/src/claude_swap/desktop_envs.py
-@@ -0,0 +1,736 @@
+@@ -0,0 +1,740 @@
 +"""Give one account's Claude Desktop the Code tab environments of another.
 +
 +An environment (a named folder or SSH target with its model, effort and
@@ -563,15 +563,20 @@ index 0000000000000000000000000000000000000000..1051e5feaae7b65252aad0704ce90822
 +                target.unlink(missing_ok=True)
 +
 +
++def _run_name() -> str:
++    """A backup run's directory name: its time to the nanosecond, so names
++    sort by age even within one second, then a random part so two runs can
++    never share one."""
++    now = time.time_ns()
++    stamp = time.strftime("%Y%m%dT%H%M%S", time.localtime(now // 10**9))
++    return f"{stamp}.{now % 10**9:09d}-{uuid.uuid4().hex[:8]}"
++
++
 +def _prune_backups(parent: Path, current: Path) -> None:
 +    """Keep ``current`` and the newest runs beside it under ``parent``,
-+    ``BACKUPS_KEPT`` in all. Age is the directory's own time: two runs in
-+    the same second differ only in the random part of their names."""
++    ``BACKUPS_KEPT`` in all; the names sort by age (see ``_run_name``)."""
 +    try:
-+        others = sorted(
-+            (p for p in parent.iterdir() if p.is_dir() and p != current),
-+            key=lambda p: (p.stat().st_mtime_ns, p.name),
-+        )
++        others = sorted(p for p in parent.iterdir() if p.is_dir() and p != current)
 +    except OSError:
 +        return
 +    for stale in others[:max(0, len(others) - (BACKUPS_KEPT - 1))]:
@@ -708,8 +713,7 @@ index 0000000000000000000000000000000000000000..1051e5feaae7b65252aad0704ce90822
 +        SessionError: a step failed. The profile is put back as it was, or
 +            the message says where its previous state is.
 +    """
-+    run = f"{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
-+    backup = _Backup(data_dir, backup_root / run)
++    backup = _Backup(data_dir, backup_root / _run_name())
 +    directory = leveldb_dir(data_dir)
 +    try:
 +        with leveldb.locked(directory):
@@ -931,10 +935,10 @@ index 0000000000000000000000000000000000000000..1051e5feaae7b65252aad0704ce90822
 +    return 1 if failed else 0
 diff --git a/src/claude_swap/leveldb.py b/src/claude_swap/leveldb.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..7cf7d5960a37197c3b324819e0733be95449cd95
+index 0000000000000000000000000000000000000000..7752406d65e5dfe3f3aa7b2abe5aa779e2bf01a8
 --- /dev/null
 +++ b/src/claude_swap/leveldb.py
-@@ -0,0 +1,559 @@
+@@ -0,0 +1,562 @@
 +"""Read a LevelDB database and add one entry to it, without a dependency.
 +
 +Chromium keeps a profile's ``localStorage`` in a LevelDB database, and
@@ -1041,7 +1045,8 @@ index 0000000000000000000000000000000000000000..7cf7d5960a37197c3b324819e0733be9
 +
 +    A record that fails its checksum or runs past its block drops the rest
 +    of that block, as LevelDB's reader does: a write torn by a crash costs
-+    its own block and nothing after it. Zero bytes are padding, not damage.
++    its own block and nothing after it. Zero bytes are padding, not damage;
++    a record whose first pieces have no last one, or the reverse, is.
 +    """
 +    records: list[bytes] = []
 +    pending: bytearray | None = None
@@ -1080,7 +1085,9 @@ index 0000000000000000000000000000000000000000..7cf7d5960a37197c3b324819e0733be9
 +            if kind == _LAST:
 +                records.append(bytes(pending))
 +                pending = None
-+    return records, clean_end, damaged
++        else:
++            damaged = True  # a middle or last piece with nothing before it
++    return records, clean_end, damaged or pending is not None
 +
 +
 +def log_records(data: bytes, *, strict: bool = False) -> list[bytes]:
@@ -1626,10 +1633,10 @@ index db51e0a7bc8de911035fe6985a9eec6cf45ffc71..b71c7ad9571eebfdc7ee7820fc33d28e
          # An unset weekly line reports null, not the threshold it falls back
 diff --git a/tests/test_desktop_envs.py b/tests/test_desktop_envs.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..66f91745577dd603951d97071005e09d9de60094
+index 0000000000000000000000000000000000000000..f5bcd63acc7c6de7d427b947fe909390d1ac820a
 --- /dev/null
 +++ b/tests/test_desktop_envs.py
-@@ -0,0 +1,718 @@
+@@ -0,0 +1,723 @@
 +"""``cswap desktop --sync-envs``: one account's Code tab environments
 +replace another's.
 +
@@ -2108,18 +2115,23 @@ index 0000000000000000000000000000000000000000..66f91745577dd603951d97071005e09d
 +            assert manager.sync_envs(["2"], source="1") == 0
 +        assert len(self._runs(manager)) == desktop_envs.BACKUPS_KEPT
 +
-+    def test_the_run_just_taken_survives_pruning(self, manager, capsys):
-+        """Runs in one second differ only in the random part of the name,
-+        which says nothing about their order."""
++    def test_the_newest_runs_survive_within_one_second(self, manager, capsys):
++        """Runs in one second, their directories stamped alike: only the
++        nanoseconds in the name tell their order, never the random part."""
++        clock = iter(1_800_000_000 * 10**9 + i * 1000 for i in range(5))
 +        suffixes = iter(MagicMock(hex=f"{9 - i}0000000") for i in range(5))
-+        with patch.object(desktop_envs.time, "strftime", return_value="20260101T000000"), \
++        taken = []
++        with patch.object(desktop_envs.time, "time_ns", side_effect=lambda: next(clock)), \
 +             patch.object(desktop_envs.uuid, "uuid4", side_effect=lambda: next(suffixes)):
 +            for _ in range(5):
 +                capsys.readouterr()
 +                assert manager.sync_envs(["2"], source="1") == 0
 +                kept = re.search(r"kept under (\S+)", _plain(capsys.readouterr().out)).group(1)
 +                assert Path(kept).is_dir()
-+        assert len(self._runs(manager)) == desktop_envs.BACKUPS_KEPT
++                taken.append(Path(kept))
++                for run in self._runs(manager):
++                    os.utime(run, ns=(10**18, 10**18))
++        assert self._runs(manager) == taken[-desktop_envs.BACKUPS_KEPT:]
 +
 +    def test_ctrl_c_puts_the_profile_back(self, manager):
 +        before = {
@@ -2350,10 +2362,10 @@ index 0000000000000000000000000000000000000000..66f91745577dd603951d97071005e09d
 +        assert "desktop --sync-envs <num|email> --from <num|email>" in capsys.readouterr().out
 diff --git a/tests/test_leveldb.py b/tests/test_leveldb.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..b8eee0eaadb2c54c722bb2288d6f72a645a7afc9
+index 0000000000000000000000000000000000000000..d7bfa342c1378795d6476f1b21ad60ea8acd0f7c
 --- /dev/null
 +++ b/tests/test_leveldb.py
-@@ -0,0 +1,381 @@
+@@ -0,0 +1,399 @@
 +"""``leveldb.py``: reading a LevelDB database and appending one write.
 +
 +The fixtures are built here byte by byte from LevelDB's documented formats
@@ -2611,6 +2623,24 @@ index 0000000000000000000000000000000000000000..b8eee0eaadb2c54c722bb2288d6f72a6
 +        manifest = bytearray((db / "MANIFEST-000001").read_bytes())
 +        manifest[-1] ^= 0xFF
 +        (db / "MANIFEST-000001").write_bytes(bytes(manifest))
++        with pytest.raises(LevelDBError, match="the MANIFEST is damaged"):
++            leveldb.read_db(db)
++
++    @pytest.mark.parametrize("keep", ["first piece only", "last piece only"])
++    def test_a_manifest_edit_missing_a_piece_is_damage(self, tmp_path, keep):
++        """An edit split over two blocks, with one of its two physical
++        records gone: every checksum left in the file is still good."""
++        db = build_db(tmp_path / "db", batches=[])
++        base = (db / "MANIFEST-000001").read_bytes()
++        edits = leveldb.log_records(base, strict=True)
++        whole = _log(edits + [b"x" * (32768 - len(base) - 7 + 40)])
++        assert whole.startswith(base) and len(whole) == 32768 + 7 + 40
++        assert len(leveldb.log_records(whole, strict=True)) == len(edits) + 1
++        if keep == "first piece only":
++            torn = whole[:32768]
++        else:
++            torn = base + b"\x00" * (32768 - len(base)) + whole[32768:]
++        (db / "MANIFEST-000001").write_bytes(torn)
 +        with pytest.raises(LevelDBError, match="the MANIFEST is damaged"):
 +            leveldb.read_db(db)
 +
