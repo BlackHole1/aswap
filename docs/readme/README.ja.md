@@ -48,6 +48,8 @@ Claude Desktop が保持できるログインは一度に 1 つだけです。`c
 
 <img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
+`cswap desktop --sync-envs 2 --from 1` は、アカウント 2 の Code タブの環境をアカウント 1 のコピーで置き換えます。対象はローカル環境と SSH 環境、その設定、そして macOS では環境変数です。先にアカウント 2 のウィンドウを閉じてください。以前の状態はバックアップディレクトリに残ります。
+
 ### アカウントごとに Chrome プロファイルを分ける
 
 Claude in Chrome は、`cswap switch` で選んだアカウントではなく、ブラウザーの claude.ai ログインを使います ([上流 #256](https://github.com/realiti4/claude-swap/issues/256))。`cswap chrome 2` は、Chrome プロファイルを別にコピーしたものでアカウント 2 を開きます。そこでは拡張機能がアカウント 2 として動作し、普段使うブラウザーのログインはそのまま残ります。
@@ -68,14 +70,15 @@ Claude in Chrome は、`cswap switch` で選んだアカウントではなく、
 
 `upstream.json` は上流のコミットを 1 つ固定します。`bun run setup` はそのコミットを改変せずに `cswap/` へクローンし、続いて `patches/` 内のすべてのパッチを [patches/.patches](../../patches/.patches) に記載された順に `git am` で適用します。これは [Electron が Chromium と Node のパッチに使っている構成](https://github.com/electron/electron/tree/main/patches) にならったものです。各差分は小さく読みやすいままで、新しい上流への移行はパッチ列のリベースで済みます。
 
-| パッチ                                                                                                                                    | 変更内容                         |
-| ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
-| [有効な認証情報の所有者に従う](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch)              | 修正：古いアカウント設定         |
-| [インストール元のディストリビューションに従う](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch) | 修正：バージョンとアップグレード |
-| [使用量をオンデマンドで更新](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)                 | 機能：`cswap refresh`            |
-| [アカウントごとに Claude Desktop を開く](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)         | 機能：`cswap desktop`            |
-| [アカウントごとに Chrome を開く](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                 | 機能：`cswap chrome`             |
-| [以前の履歴共有の選択を保持する](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)                   | 修正：以前の履歴設定             |
+| パッチ                                                                                                                                    | 変更内容                          |
+| ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| [有効な認証情報の所有者に従う](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch)              | 修正：古いアカウント設定          |
+| [インストール元のディストリビューションに従う](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch) | 修正：バージョンとアップグレード  |
+| [使用量をオンデマンドで更新](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)                 | 機能：`cswap refresh`             |
+| [アカウントごとに Claude Desktop を開く](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)         | 機能：`cswap desktop`             |
+| [アカウントごとに Chrome を開く](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                 | 機能：`cswap chrome`              |
+| [以前の履歴共有の選択を保持する](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)                   | 修正：以前の履歴設定              |
+| [Claude Desktop の環境を同期する](../../patches/feat_sync_claude_desktop_environments_from_one_account_to_another.patch)                  | 機能：`cswap desktop --sync-envs` |
 
 各パッチは 1 つのコミットで、コミットメッセージで上流の問題を説明しています。ソースからのビルドやパッチの作業については [CONTRIBUTING.md](../../CONTRIBUTING.md) を参照してください。
 

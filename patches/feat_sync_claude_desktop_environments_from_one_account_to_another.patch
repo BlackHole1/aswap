@@ -1,0 +1,2344 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kevin Cui <bh@bugs.cc>
+Date: Wed, 18 Nov 2026 08:16:46 -0500
+Subject: feat: sync Claude Desktop environments from one account to another
+
+The Code tab's environments (a named folder or SSH target with its model,
+effort and worktree choices) belong to the account that created them, so
+an account opened through `cswap desktop` starts with none of the ones
+another account already has, and there is nothing in the app to carry
+them over.
+
+`cswap desktop --sync-envs <num|email ...> --from <num|email>` replaces
+the given accounts' environments with a copy of the source account's;
+`--all` does it for every other account, and the `desktop.envSource`
+setting names the source when `--from` is left out. It is a replacement,
+not a merge: the target ends up with exactly the source's environments.
+
+Where the app keeps them, read from Claude Desktop 6.6395.0:
+
+- The environments are a renderer store persisted in `localStorage` for
+  `https://claude.ai`, key `persisted.ccd-session-presets.<account
+  uuid>`, which Chromium keeps in the LevelDB database under
+  `Local Storage/leveldb`. The value also holds the settings remembered
+  per folder, the built-in "this computer" entry's settings and the
+  recently started places, and names no account, so it is copied whole
+  and never parsed: the feature does not depend on its shape.
+- `ccd-session-presets.json` is a mirror for the main process. The app
+  imports it only for a profile whose `localStorage` has no store yet and
+  overwrites it from the store afterwards, so editing the file alone
+  changes nothing. The account's bucket is copied so the two agree.
+- `ssh_configs.json` holds the SSH connections an SSH environment refers
+  to by id. The source's are added by id, the source winning; a
+  connection only the target has stays, since its existing SSH sessions
+  still point at it.
+- `ccd-environment-config.json` holds environment variables encrypted
+  with Electron's safeStorage: `envVars` for the whole profile, copied as
+  it is, and `scopedEnvVars` per environment, keyed by account UUID
+  inside the encrypted value. That one is decrypted, moved to the
+  target's UUID and encrypted again with the key safeStorage keeps in the
+  login Keychain (PBKDF2-HMAC-SHA1, AES-128-CBC through CommonCrypto).
+  macOS asks before handing the key to `security`, and the Keychain is
+  only read when either side has per-environment variables. Other
+  platforms keep that key per profile or per desktop keyring, so
+  variables are left alone there, with a note.
+
+Python has no LevelDB and the bindings need a native build, so
+`leveldb.py` implements the two operations needed: reading the newest
+value of every key (MANIFEST, tables with Snappy blocks, write-ahead log)
+and appending one write to the live log, which LevelDB replays on its
+next open. No table and no MANIFEST is rewritten. Checked against the
+real thing: a database written this way was opened with LevelDB itself
+(classic-level) and returned the new value.
+
+The account's profiles are the stock profile, when it is signed in as
+that account, and its own `cswap desktop` profile; the source is read
+from the first that holds a store, and every one of the target's is
+written. A target must have its windows closed: a running app holds the
+database lock, keeps its own copy of the store in memory and writes it
+back. The window check is backed by taking LevelDB's own lock on the
+database, so an app the check misses still refuses the write. Each
+profile's database and three files are copied under
+`history-conflicts/desktop-envs-<profile>/` before anything is written
+(the newest three runs are kept) and put back if a step fails.
+
+diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
+index 3c0926d3f62629fdcf7d5ee4c48a449955ecaa81..2f6a60307b5c1e670d79f880933ca364a95bebfa 100644
+--- a/src/claude_swap/cli.py
++++ b/src/claude_swap/cli.py
+@@ -405,7 +405,7 @@ def _refresh_command(argv: list[str]) -> None:
+ 
+ 
+ def _desktop_command(argv: list[str]) -> None:
+-    """Handle `cswap desktop [num|email ...] [--all] [--quit]`.
++    """Handle `cswap desktop [num|email ...] [--all] [--quit | --sync-envs]`.
+ 
+     Claude Desktop keeps one login per profile, so a second account means
+     signing the first one out. Each stored account gets its own permanent
+@@ -423,9 +423,14 @@ def _desktop_command(argv: list[str]) -> None:
+             "shows a sign-in: sign in to that account once, and it stays "
+             "signed in. Several accounts can be open at once. The Code tab's "
+             "local sessions are shared with the stock profile (setting "
+-            "desktop.shareSessions; not on Windows). With no account: list "
+-            "each account's window. Exits 1 if any account could not be "
+-            "opened."
++            "desktop.shareSessions; not on Windows). --sync-envs replaces an "
++            "account's Code tab environments (local and SSH, with their "
++            "settings, SSH connections and, on macOS, environment variables) "
++            "with a copy of another account's, named by --from or the "
++            "desktop.envSource setting; the target's windows must be closed, "
++            "and its previous state is kept in the backup directory. With no "
++            "account: list each account's window. Exits 1 if any account "
++            "could not be opened or synced."
+         ),
+         formatter_class=argparse.RawDescriptionHelpFormatter,
+         epilog="""
+@@ -435,6 +440,9 @@ Examples:
+   cswap desktop work personal   # by alias or email; several at once
+   cswap desktop --all           # every account, one window each
+   cswap desktop --quit 2        # close account 2's window
++  cswap desktop --sync-envs 2 --from 1   # account 2 gets a copy of account 1's environments
++  cswap desktop --sync-envs --all        # every other account follows desktop.envSource
++  cswap config set desktop.envSource 1   # the account --sync-envs copies from by default
+   cswap config set desktop.appPath /path/to/Claude.app   # non-standard install
+         """,
+     )
+@@ -451,12 +459,31 @@ Examples:
+         "--quit", action="store_true",
+         help="Close the given accounts' windows instead of opening them",
+     )
++    parser.add_argument(
++        "--sync-envs", action="store_true",
++        help=(
++            "Replace the given accounts' Code tab environments with a copy "
++            "of the --from account's"
++        ),
++    )
++    parser.add_argument(
++        "--from", dest="source", metavar="num|email",
++        help=(
++            "With --sync-envs: the account to copy environments from "
++            "(default: the desktop.envSource setting)"
++        ),
++    )
+     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+     args = parser.parse_args(argv)
+     if args.all and args.accounts:
+         parser.error("--all takes no accounts")
+-    if args.quit and not (args.all or args.accounts):
+-        parser.error("--quit needs an account or --all")
++    if args.quit and args.sync_envs:
++        parser.error("--quit and --sync-envs are exclusive")
++    for flag in ("quit", "sync_envs"):
++        if getattr(args, flag) and not (args.all or args.accounts):
++            parser.error(f"--{flag.replace('_', '-')} needs an account or --all")
++    if args.source and not args.sync_envs:
++        parser.error("--from only applies to --sync-envs")
+ 
+     try:
+         switcher = ClaudeAccountSwitcher(debug=args.debug)
+@@ -467,6 +494,8 @@ Examples:
+         manager = DesktopManager(switcher)
+         if args.quit:
+             code = manager.quit(args.accounts, args.all)
++        elif args.sync_envs:
++            code = manager.sync_envs(args.accounts, args.all, args.source)
+         elif args.all or args.accounts:
+             code = manager.open(args.accounts, args.all)
+         else:
+@@ -1734,6 +1763,7 @@ Commands:
+   %(prog)s desktop <num|email ...>    open Claude Desktop as an account, own window
+   %(prog)s desktop --all              one Claude Desktop window per account
+   %(prog)s desktop --quit <num|email> close an account's Claude Desktop window
++  %(prog)s desktop --sync-envs <num|email> --from <num|email>  copy an account's Code tab environments
+   %(prog)s desktop                    which accounts have a window open
+   %(prog)s chrome <num|email ...>     open Chrome as an account, own profile + extension
+   %(prog)s chrome --all               one Chrome profile per account
+diff --git a/src/claude_swap/desktop.py b/src/claude_swap/desktop.py
+index cd1bfce3dff283eae95d8617c126d1d49e5f40a5..e5405bda4b4bda19f346446eb38148f9e47c4835 100644
+--- a/src/claude_swap/desktop.py
++++ b/src/claude_swap/desktop.py
+@@ -22,6 +22,10 @@ Those directories are keyed by account UUID one level down, so every
+ profile can share the stock install's copies: ``desktop.shareSessions``
+ (default on) links them into the profile, merging anything the profile
+ accumulated on its own first.
++
++The Code tab's environments are per account too, but live inside the
++profile's ``localStorage`` under the account's UUID, where no link reaches
++them; ``desktop_envs.py`` copies one account's onto another on request.
+ """
+ 
+ from __future__ import annotations
+@@ -613,6 +617,17 @@ class DesktopManager:
+             "--all opens every account; --quit closes them."
+         ))
+ 
++    def sync_envs(
++        self, identifiers: list[str], all_accounts: bool = False,
++        source: str | None = None,
++    ) -> int:
++        """Replace the given accounts' Code tab environments with those of
++        ``source`` (default: the ``desktop.envSource`` setting). See
++        ``desktop_envs.sync``."""
++        from claude_swap import desktop_envs
++
++        return desktop_envs.sync(self, identifiers, all_accounts, source)
++
+     # -- shared state ------------------------------------------------------
+ 
+     def sync_shared_state(self, data_dir: Path) -> None:
+diff --git a/src/claude_swap/desktop_envs.py b/src/claude_swap/desktop_envs.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..0f431b0fff2b7ad1c221aea478e63893cec07f96
+--- /dev/null
++++ b/src/claude_swap/desktop_envs.py
+@@ -0,0 +1,637 @@
++"""Give one account's Claude Desktop the Code tab environments of another.
++
++An environment (a named folder or SSH target with its model, effort and
++worktree choices) belongs to the account that created it, so a second
++account opens the Code tab with none of them. ``cswap desktop --sync-envs``
++replaces an account's environments with a copy of another account's.
++
++Where Claude Desktop keeps them (read from Claude Desktop 6.6395.0, the
++``app.asar`` main bundle and the ``ion-dist.asar`` renderer bundle):
++
++- The environments themselves are a store the renderer persists in
++  ``localStorage`` for ``https://claude.ai``, under
++  ``persisted.ccd-session-presets.<account uuid>``. Chromium keeps that in
++  the LevelDB database ``<profile>/Local Storage/leveldb``. The value also
++  holds the settings remembered per folder, the built-in "this computer"
++  entry's settings and the recently started places. It names no account, so
++  it is copied whole and never parsed: nothing here depends on its shape.
++- ``<profile>/ccd-session-presets.json`` mirrors the environments for the
++  main process, one bucket per account UUID. The app reads it only for a
++  profile whose ``localStorage`` has no store yet and overwrites it from the
++  store after that, so writing the file alone changes nothing. The account's
++  bucket is copied along so the two agree until the app next writes it.
++- ``<profile>/ssh_configs.json`` holds the SSH connections an SSH
++  environment refers to by id. The source's connections are added to the
++  target's by id (the source wins); a connection only the target has stays,
++  because its existing SSH sessions still point at it.
++- ``<profile>/ccd-environment-config.json`` holds environment variables,
++  encrypted with Electron's ``safeStorage``: ``envVars`` for every local
++  session of the profile, and ``scopedEnvVars`` per environment, keyed by
++  account UUID inside the encrypted value. The first is copied as it is. The
++  second has to be decrypted, moved to the target's account UUID and
++  encrypted again, which needs the key ``safeStorage`` keeps in the login
++  Keychain; macOS asks before handing it over. Only macOS is handled:
++  elsewhere the key is per profile or per desktop keyring.
++
++The database is written with the app closed: a running app holds the
++database lock, keeps its own copy of the store in memory and writes it back.
++Every profile is copied aside before it is touched and put back if a step
++fails.
++"""
++
++from __future__ import annotations
++
++import base64
++import hashlib
++import json
++import shutil
++import time
++import uuid
++from dataclasses import dataclass, field
++from pathlib import Path
++from typing import TYPE_CHECKING
++
++from claude_swap import desktop, leveldb, macos_keychain
++from claude_swap.exceptions import AccountNotFoundError, ConfigError, SessionError
++from claude_swap.fsutil import atomic_write_bytes
++from claude_swap.models import Platform
++from claude_swap.printer import accent, dimmed, error, warning
++from claude_swap.session import QUARANTINE_DIRNAME
++
++if TYPE_CHECKING:
++    from claude_swap.desktop import DesktopManager
++
++LEVELDB_PARTS = ("Local Storage", "leveldb")
++STORE_ORIGIN = "https://claude.ai"
++STORE_NAME = "persisted.ccd-session-presets."
++MIRROR_FILE = "ccd-session-presets.json"
++SSH_FILE = "ssh_configs.json"
++ENV_FILE = "ccd-environment-config.json"
++PROFILE_FILES = (MIRROR_FILE, SSH_FILE, ENV_FILE)
++
++# Electron names the Keychain item after the app: "<name> Safe Storage",
++# account "<name>".
++SAFE_STORAGE_SERVICE = "Claude Safe Storage"
++SAFE_STORAGE_ACCOUNT = "Claude"
++# The first read of another app's Keychain item waits on a dialog.
++KEYCHAIN_PROMPT_TIMEOUT_S = 120.0
++
++BACKUPS_KEPT = 3
++SOURCE_READ_ATTEMPTS = 3
++
++
++class EnvVarsUnavailable(Exception):
++    """Environment variables could not be read or re-encrypted; the reason
++    is the message. Never fatal: the environments are still copied."""
++
++
++def leveldb_dir(data_dir: Path) -> Path:
++    return data_dir.joinpath(*LEVELDB_PARTS)
++
++
++def store_key(account_uuid: str) -> bytes:
++    """The LevelDB key of an account's environment store.
++
++    Chromium's ``localStorage`` key is ``_<origin>\\0<key>``, the key
++    prefixed by one byte for its encoding: 1 for Latin-1, which every key
++    made of an ASCII name and a UUID is.
++    """
++    return (
++        b"_" + STORE_ORIGIN.encode("ascii") + b"\x00\x01"
++        + (STORE_NAME + account_uuid).encode("latin-1")
++    )
++
++
++def count_environments(store: bytes) -> int | None:
++    """How many environments a store value holds, for the report only;
++    None when the value does not look the way this release writes it."""
++    try:
++        text = store[1:].decode("utf-16-le" if store[:1] == b"\x00" else "latin-1")
++        presets = json.loads(text)["state"]["presets"]
++    except (ValueError, KeyError, TypeError):
++        return None
++    return len(presets) if isinstance(presets, list) else None
++
++
++def _read_json(path: Path) -> dict | None:
++    """The JSON object in ``path``; None when it is missing or not one."""
++    try:
++        data = json.loads(path.read_text(encoding="utf-8"))
++    except (OSError, ValueError):
++        return None
++    return data if isinstance(data, dict) else None
++
++
++def _write_json(path: Path, data: dict) -> None:
++    atomic_write_bytes(path, json.dumps(data, indent="\t").encode("utf-8"))
++
++
++# -- safeStorage ---------------------------------------------------------------
++
++
++def _aes_128_cbc(key: bytes, data: bytes, *, encrypt: bool) -> bytes:
++    """AES-128-CBC with PKCS#7 padding through CommonCrypto, which every
++    macOS ships; the standard library has no AES."""
++    import ctypes
++
++    lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
++    lib.CCCrypt.restype = ctypes.c_int32
++    out = ctypes.create_string_buffer(len(data) + 16)
++    moved = ctypes.c_size_t(0)
++    status = lib.CCCrypt(
++        ctypes.c_uint32(0 if encrypt else 1),  # kCCEncrypt / kCCDecrypt
++        ctypes.c_uint32(0),                    # kCCAlgorithmAES
++        ctypes.c_uint32(1),                    # kCCOptionPKCS7Padding
++        ctypes.c_char_p(key), ctypes.c_size_t(len(key)),
++        ctypes.c_char_p(b" " * 16),
++        ctypes.c_char_p(data), ctypes.c_size_t(len(data)),
++        out, ctypes.c_size_t(len(out)),
++        ctypes.byref(moved),
++    )
++    if status != 0:
++        raise EnvVarsUnavailable(
++            "the stored value does not decrypt with the Keychain's key"
++            if not encrypt else f"encryption failed (CommonCrypto status {status})"
++        )
++    return out.raw[:moved.value]
++
++
++@dataclass
++class SafeStorage:
++    """Electron's ``safeStorage`` for Claude Desktop on macOS.
++
++    Chromium's ``OSCrypt`` there: the Keychain holds a password, the AES-128
++    key is PBKDF2-HMAC-SHA1 of it (salt ``saltysalt``, 1003 rounds), the IV
++    is sixteen spaces and the ciphertext carries a ``v10`` prefix. The
++    Keychain item belongs to the app, not to a profile, so every profile on
++    the machine encrypts with the same key.
++    """
++
++    platform: Platform
++    _key: bytes | None = field(default=None, repr=False)
++
++    def key(self) -> bytes:
++        if self._key is not None:
++            return self._key
++        if self.platform != Platform.MACOS:
++            raise EnvVarsUnavailable(
++                "they are encrypted with a key this platform keeps per profile"
++            )
++        print(dimmed(
++            "  reading Claude's Safe Storage key from the Keychain to copy "
++            "environment variables; macOS may ask for your password"
++        ))
++        try:
++            password = macos_keychain.get_password(
++                SAFE_STORAGE_SERVICE, SAFE_STORAGE_ACCOUNT,
++                timeout=KEYCHAIN_PROMPT_TIMEOUT_S,
++            )
++        except macos_keychain.KeychainError as exc:
++            raise EnvVarsUnavailable(f"the Keychain refused the key ({exc})") from exc
++        if not password:
++            raise EnvVarsUnavailable(
++                f"the Keychain has no '{SAFE_STORAGE_SERVICE}' item"
++            )
++        self._key = hashlib.pbkdf2_hmac(
++            "sha1", password.encode("utf-8"), b"saltysalt", 1003, 16
++        )
++        return self._key
++
++    def decrypt(self, blob: object) -> str:
++        try:
++            raw = base64.b64decode(blob, validate=True) if isinstance(blob, str) else b""
++        except ValueError:
++            raw = b""
++        if not raw.startswith(b"v10"):
++            raise EnvVarsUnavailable("the stored value is not in a known format")
++        try:
++            return _aes_128_cbc(self.key(), raw[3:], encrypt=False).decode("utf-8")
++        except UnicodeDecodeError as exc:
++            raise EnvVarsUnavailable(
++                "the stored value does not decrypt with the Keychain's key"
++            ) from exc
++
++    def encrypt(self, text: str) -> str:
++        sealed = _aes_128_cbc(self.key(), text.encode("utf-8"), encrypt=True)
++        return base64.b64encode(b"v10" + sealed).decode("ascii")
++
++    def decrypt_scopes(self, blob: object) -> dict:
++        """The decrypted ``scopedEnvVars``: account UUID to its scopes."""
++        try:
++            scopes = json.loads(self.decrypt(blob))
++        except ValueError as exc:
++            raise EnvVarsUnavailable("the stored value is not JSON") from exc
++        if not isinstance(scopes, dict):
++            raise EnvVarsUnavailable("the stored value is not a JSON object")
++        return scopes
++
++
++# -- reading the source --------------------------------------------------------
++
++
++@dataclass(frozen=True)
++class Environments:
++    """One account's environments as read from a profile.
++
++    ``store`` is the ``localStorage`` value, verbatim. ``global_env`` is the
++    profile-wide part of the environment-variable file, still encrypted.
++    ``scoped_env`` is the account's own entry of the per-environment
++    variables, decrypted, or None when it has none or they were not read.
++    """
++
++    store: bytes
++    mirror: dict | None
++    ssh: dict | None
++    global_env: dict
++    scoped_env: dict | None
++    count: int | None
++
++
++def read_environments(
++    data_dir: Path, account_uuid: str, safe_storage: SafeStorage
++) -> tuple[Environments | None, str | None]:
++    """Read an account's environments from the profile at ``data_dir``.
++
++    Returns ``(environments, why)``: the environments, or None when the
++    profile holds no store for the account, and the reason environment
++    variables were left out, or None when they were read (or there are
++    none). The database may belong to a running app, which rewrites its
++    files as it works, so a failed read is tried again.
++
++    Raises:
++        SessionError: the database stayed unreadable.
++    """
++    directory = leveldb_dir(data_dir)
++    for attempt in range(SOURCE_READ_ATTEMPTS):
++        try:
++            store = leveldb.read_db(directory).get(store_key(account_uuid))
++            break
++        except leveldb.LevelDBError as exc:
++            if attempt == SOURCE_READ_ATTEMPTS - 1:
++                raise SessionError(str(exc)) from exc
++            time.sleep(0.3)
++    if store is None:
++        return None, None
++
++    mirror_file = _read_json(data_dir / MIRROR_FILE) or {}
++    buckets = mirror_file.get("byAccount")
++    mirror = buckets.get(account_uuid) if isinstance(buckets, dict) else None
++
++    env_file = _read_json(data_dir / ENV_FILE)
++    global_env: dict = {}
++    scoped_env = None
++    why = None
++    if env_file is None:
++        if (data_dir / ENV_FILE).exists():
++            why = f"{data_dir / ENV_FILE} is not readable JSON"
++    elif "envVars" in env_file or "scopedEnvVars" in env_file:
++        if safe_storage.platform != Platform.MACOS:
++            why = "they are encrypted with a key this platform keeps per profile"
++        else:
++            global_env = {
++                key: env_file[key] for key in ("envVars", "tmpDirOverride")
++                if key in env_file
++            }
++            if "scopedEnvVars" in env_file:
++                try:
++                    entry = safe_storage.decrypt_scopes(
++                        env_file["scopedEnvVars"]
++                    ).get(account_uuid)
++                    scoped_env = entry if isinstance(entry, dict) else None
++                except EnvVarsUnavailable as exc:
++                    why = str(exc)
++    return Environments(
++        store=store,
++        mirror=mirror if isinstance(mirror, dict) else None,
++        ssh=_read_json(data_dir / SSH_FILE),
++        global_env=global_env,
++        scoped_env=scoped_env,
++        count=count_environments(store),
++    ), why
++
++
++# -- writing a target ----------------------------------------------------------
++
++
++@dataclass
++class _Backup:
++    """A profile's environment state, copied aside before it is replaced."""
++
++    data_dir: Path
++    dest: Path
++    had: dict[str, bool] = field(default_factory=dict)
++
++    def take(self) -> None:
++        desktop.DesktopManager._mkdir_private(self.dest)
++        shutil.copytree(leveldb_dir(self.data_dir), self.dest / "leveldb")
++        for name in PROFILE_FILES:
++            src = self.data_dir / name
++            self.had[name] = src.is_file()
++            if self.had[name]:
++                shutil.copy2(src, self.dest / name)
++
++    def restore(self) -> None:
++        live = leveldb_dir(self.data_dir)
++        shutil.rmtree(live)
++        shutil.copytree(self.dest / "leveldb", live)
++        for name, existed in self.had.items():
++            target = self.data_dir / name
++            if existed:
++                shutil.copy2(self.dest / name, target)
++            else:
++                target.unlink(missing_ok=True)
++
++
++def _prune_backups(parent: Path) -> None:
++    """Keep the newest ``BACKUPS_KEPT`` runs under ``parent``; a run's name
++    starts with its time, so the names sort by age."""
++    try:
++        runs = sorted(p for p in parent.iterdir() if p.is_dir())
++    except OSError:
++        return
++    for stale in runs[:-BACKUPS_KEPT]:
++        shutil.rmtree(stale, ignore_errors=True)
++
++
++def merge_ssh(target: dict | None, source: dict) -> dict:
++    """``target``'s SSH connections with ``source``'s laid over them by id,
++    and the trusted hosts of both."""
++    target = target or {}
++
++    def entries(data: dict, key: str) -> list:
++        value = data.get(key)
++        return value if isinstance(value, list) else []
++
++    configs = list(entries(source, "configs"))
++    taken = {c.get("id") for c in configs if isinstance(c, dict)}
++    configs += [
++        c for c in entries(target, "configs")
++        if not (isinstance(c, dict) and c.get("id") in taken)
++    ]
++    hosts = list(entries(source, "trustedHosts"))
++    hosts += [h for h in entries(target, "trustedHosts") if h not in hosts]
++    return {**target, **source, "configs": configs, "trustedHosts": hosts}
++
++
++def _write_env_vars(
++    data_dir: Path, account_uuid: str, envs: Environments, safe_storage: SafeStorage
++) -> None:
++    """Make the profile's environment variables the source's.
++
++    The profile-wide part replaces the profile's, or is removed when the
++    source has none. The per-environment part replaces this account's entry
++    only; other accounts' entries in the same file stay. The Keychain is
++    only needed when either side has per-environment variables.
++
++    Raises:
++        EnvVarsUnavailable: the profile's own stored variables do not
++            decrypt, so rewriting them would drop what is there.
++    """
++    path = data_dir / ENV_FILE
++    current = _read_json(path) or {}
++    updated = {
++        key: value for key, value in current.items()
++        if key not in ("envVars", "tmpDirOverride")
++    }
++    updated.update(envs.global_env)
++    if envs.scoped_env or "scopedEnvVars" in current:
++        scopes = (
++            safe_storage.decrypt_scopes(current["scopedEnvVars"])
++            if "scopedEnvVars" in current else {}
++        )
++        before = scopes.get(account_uuid)
++        if envs.scoped_env:
++            scopes[account_uuid] = envs.scoped_env
++        else:
++            scopes.pop(account_uuid, None)
++        if scopes.get(account_uuid) != before:
++            updated["scopedEnvVars"] = safe_storage.encrypt(
++                json.dumps(scopes, separators=(",", ":"))
++            )
++    if updated != current:
++        _write_json(path, updated)
++
++
++def replace_environments(
++    data_dir: Path, account_uuid: str, envs: Environments,
++    backup_root: Path, safe_storage: SafeStorage, *, copy_env_vars: bool,
++) -> tuple[Path, str | None]:
++    """Replace the account's environments in the profile at ``data_dir``.
++
++    The caller has checked that no app uses the profile; the database lock
++    is taken as well, so one that is missed still refuses the write. Returns
++    where the profile's previous state was copied, and the reason its
++    environment variables were left alone, if they were.
++
++    Raises:
++        SessionError: a step failed. The profile is put back as it was, or
++            the message says where its previous state is.
++    """
++    run = f"{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
++    backup = _Backup(data_dir, backup_root / run)
++    directory = leveldb_dir(data_dir)
++    why = None
++    try:
++        with leveldb.locked(directory):
++            backup.take()
++            try:
++                leveldb.put(directory, store_key(account_uuid), envs.store)
++                if envs.mirror is not None:
++                    mirror = _read_json(data_dir / MIRROR_FILE) or {}
++                    buckets = mirror.get("byAccount")
++                    mirror["byAccount"] = {
++                        **(buckets if isinstance(buckets, dict) else {}),
++                        account_uuid: envs.mirror,
++                    }
++                    _write_json(data_dir / MIRROR_FILE, mirror)
++                if envs.ssh is not None:
++                    _write_json(
++                        data_dir / SSH_FILE,
++                        merge_ssh(_read_json(data_dir / SSH_FILE), envs.ssh),
++                    )
++                if copy_env_vars:
++                    try:
++                        _write_env_vars(data_dir, account_uuid, envs, safe_storage)
++                    except EnvVarsUnavailable as exc:
++                        why = str(exc)
++            except (leveldb.LevelDBError, OSError) as exc:
++                try:
++                    backup.restore()
++                except OSError as undo:
++                    raise SessionError(
++                        f"{exc}; putting the profile back failed too ({undo}). "
++                        f"Its previous state is under {backup.dest}"
++                    ) from exc
++                shutil.rmtree(backup.dest, ignore_errors=True)
++                raise SessionError(f"{exc}; the profile was put back as it was") from exc
++    except (leveldb.LevelDBError, OSError) as exc:
++        shutil.rmtree(backup.dest, ignore_errors=True)
++        raise SessionError(f"{exc}; nothing was changed") from exc
++    _prune_backups(backup_root)
++    return backup.dest, why
++
++
++# -- the command ---------------------------------------------------------------
++
++
++@dataclass(frozen=True)
++class Home:
++    """A profile an account is signed in to: the stock one or its own."""
++
++    data_dir: Path
++    stock: bool
++
++
++def account_homes(manager: DesktopManager, number: str, email: str) -> list[Home]:
++    """The profiles that hold the account's environments, the stock profile
++    first: the one Claude Desktop uses when opened normally, when it is
++    signed in as this account, then the account's own ``cswap desktop``
++    profile. Only profiles the app has run in (they have the database)."""
++    homes = []
++    account_uuid = manager._account_uuid(number)
++    stock = desktop.default_user_data_dir(manager.platform)
++    if (
++        account_uuid
++        and desktop.stock_account_uuid(stock) == account_uuid
++        and (leveldb_dir(stock) / "CURRENT").is_file()
++    ):
++        homes.append(Home(stock, True))
++    own = manager.data_dir(number, email)
++    if (leveldb_dir(own) / "CURRENT").is_file():
++        homes.append(Home(own, False))
++    return homes
++
++
++def _open_reason(manager: DesktopManager, home: Home, number: str) -> str | None:
++    """Why the profile cannot be written right now, or None."""
++    if home.stock:
++        try:
++            running = desktop.stock_instance_running(manager.app(), manager.platform)
++        except ConfigError:
++            running = False  # no app found: the database lock still decides
++        if running:
++            return (
++                "Claude Desktop is open on the stock profile, which is signed "
++                "in as this account; quit it first"
++            )
++        return None
++    pids = desktop.running_pids(home.data_dir, manager.platform)
++    if pids:
++        return (
++            f"Claude Desktop open (PID {', '.join(map(str, pids))}); close it "
++            f"first ('cswap desktop --quit {number}')"
++        )
++    return None
++
++
++def _resolve_source(manager: DesktopManager, source: str | None) -> tuple[str, str]:
++    from claude_swap.settings import load_desktop_settings
++
++    configured = load_desktop_settings(manager.switcher.backup_dir).env_source
++    ident = source or configured
++    if not ident:
++        raise ConfigError(
++            "no account to copy environments from; pass --from <num|email>, or "
++            "set one with 'cswap config set desktop.envSource <num|email>'"
++        )
++    try:
++        number, email, _ = manager.switcher.resolve_account(ident)
++    except AccountNotFoundError as exc:
++        where = "--from" if source else "desktop.envSource"
++        raise ConfigError(f"{where} {ident}: account not found") from exc
++    return number, email
++
++
++def sync(
++    manager: DesktopManager,
++    identifiers: list[str],
++    all_accounts: bool,
++    source: str | None,
++) -> int:
++    """Replace the given accounts' environments with the source account's.
++
++    The source is ``source`` or the ``desktop.envSource`` setting. Each
++    target must have every window of its account closed; an account that
++    never opened Claude Desktop is skipped with a note. Returns 1 when any
++    requested account, or any account's environment variables, could not be
++    synced.
++
++    Raises:
++        ConfigError: no usable source account.
++        SessionError: the source account has no environments to copy.
++    """
++    src_number, src_email = _resolve_source(manager, source)
++    src_label = f"{src_number}. {src_email}"
++    src_uuid = manager._account_uuid(src_number)
++    safe_storage = SafeStorage(manager.platform)
++    envs = env_why = None
++    for home in account_homes(manager, src_number, src_email):
++        envs, env_why = read_environments(home.data_dir, src_uuid, safe_storage)
++        if envs is not None:
++            break
++    if envs is None:
++        raise SessionError(
++            f"account {src_label} has no environments on this machine yet; "
++            "open its Claude Desktop window once, then retry"
++        )
++    count = "" if envs.count is None else f" ({envs.count} environment(s))"
++    print(f"  copying from {src_label}{count}")
++    failed = False
++    if env_why:
++        warning(f"  environment variables are not copied: {env_why}")
++        failed = True
++
++    backup_base = manager.switcher.backup_dir / QUARANTINE_DIRNAME
++    for target in manager._targets(identifiers, all_accounts):
++        if target is None:
++            failed = True
++            continue
++        number, email = target
++        label = f"{number}. {email}"
++        if number == src_number:
++            if not all_accounts:
++                error(f"  {label}: is the account being copied from")
++                failed = True
++            continue
++        account_uuid = manager._account_uuid(number)
++        if not account_uuid:
++            error(f"  {label}: no account UUID stored; run 'cswap add' for it again")
++            failed = True
++            continue
++        homes = account_homes(manager, number, email)
++        if not homes:
++            print(f"  {label} {dimmed('never opened, nothing to sync')}")
++            continue
++        blocked = next(
++            (why for home in homes if (why := _open_reason(manager, home, number))),
++            None,
++        )
++        if blocked:
++            error(f"  {label}: {blocked}")
++            failed = True
++            continue
++        kept, notes = [], []
++        try:
++            for home in homes:
++                name = "stock" if home.stock else home.data_dir.name
++                dest, why = replace_environments(
++                    home.data_dir, account_uuid, envs,
++                    backup_base / f"desktop-envs-{name}", safe_storage,
++                    copy_env_vars=(
++                        env_why is None and manager.platform == Platform.MACOS
++                    ),
++                )
++                kept.append(dest)
++                if why:
++                    notes.append(why)
++        except SessionError as exc:
++            error(f"  {label}: {exc}")
++            failed = True
++            continue
++        print(f"  {label} {accent('synced')}")
++        for dest in kept:
++            print(dimmed(f"     previous state kept under {dest}"))
++        for why in notes:
++            warning(f"     its environment variables were left as they were: {why}")
++            failed = True
++    return 1 if failed else 0
+diff --git a/src/claude_swap/leveldb.py b/src/claude_swap/leveldb.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ddf57eaa3830be86c8b14d13aaebcd89d3854544
+--- /dev/null
++++ b/src/claude_swap/leveldb.py
+@@ -0,0 +1,506 @@
++"""Read a LevelDB database and add one entry to it, without a dependency.
++
++Chromium keeps a profile's ``localStorage`` in a LevelDB database, and
++Claude Desktop keeps the Code tab's environments there (see
++``desktop_envs.py``). Python has no LevelDB in its standard library and the
++bindings need a native build, so this module implements the two things that
++feature needs and nothing more:
++
++- :func:`read_db` returns the newest value of every key. It reads the
++  ``MANIFEST`` for the live table files, every table (``.ldb``, blocks
++  optionally Snappy-compressed) and the write-ahead log, and keeps the entry
++  with the highest sequence number per key, the rule LevelDB itself applies.
++- :func:`put` appends one write to the live write-ahead log. LevelDB replays
++  that log the next time it opens the database, so the entry is as durable as
++  one LevelDB wrote itself. No table and no ``MANIFEST`` is ever rewritten.
++
++Neither may run while another process has the database open for writing:
++that process keeps its own copy of recent writes in memory and its own idea
++of the next sequence number. :func:`locked` takes the same advisory lock
++LevelDB takes on its ``LOCK`` file, so an open database refuses the write.
++
++The formats are the ones in LevelDB's ``doc/log_format.md``,
++``doc/table_format.md`` and ``db/version_edit.cc``; they have not changed
++since LevelDB 1.0.
++"""
++
++from __future__ import annotations
++
++import os
++import struct
++import sys
++from contextlib import contextmanager
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Iterator
++
++BLOCK_SIZE = 32768
++_HEADER_SIZE = 7  # checksum (4), length (2), type (1)
++_FULL, _FIRST, _MIDDLE, _LAST = 1, 2, 3, 4
++_TABLE_MAGIC = 0xDB4775248B80FB57
++_FOOTER_SIZE = 48
++_PUT, _DELETE = 1, 0
++
++
++class LevelDBError(Exception):
++    """The database could not be read or written as LevelDB."""
++
++
++def _crc_table() -> tuple[int, ...]:
++    table = []
++    for n in range(256):
++        c = n
++        for _ in range(8):
++            c = (c >> 1) ^ 0x82F63B78 if c & 1 else c >> 1
++        table.append(c)
++    return tuple(table)
++
++
++_CRC_TABLE = _crc_table()
++
++
++def crc32c(data: bytes) -> int:
++    """CRC-32C (Castagnoli), the checksum LevelDB uses throughout."""
++    crc = 0xFFFFFFFF
++    for byte in data:
++        crc = _CRC_TABLE[(crc ^ byte) & 0xFF] ^ (crc >> 8)
++    return crc ^ 0xFFFFFFFF
++
++
++def _masked(crc: int) -> int:
++    """LevelDB stores checksums rotated and offset, so a checksum of data
++    that itself embeds checksums stays well distributed."""
++    return (((crc >> 15) | (crc << 17)) + 0xA282EAD8) & 0xFFFFFFFF
++
++
++def _varint(buf: bytes, pos: int) -> tuple[int, int]:
++    shift = result = 0
++    while True:
++        byte = buf[pos]
++        pos += 1
++        result |= (byte & 0x7F) << shift
++        if not byte & 0x80:
++            return result, pos
++        shift += 7
++        if shift > 63:
++            raise ValueError("varint too long")
++
++
++def encode_varint(value: int) -> bytes:
++    out = bytearray()
++    while value >= 0x80:
++        out.append((value & 0x7F) | 0x80)
++        value >>= 7
++    out.append(value)
++    return bytes(out)
++
++
++# -- log format (write-ahead log and MANIFEST) --------------------------------
++
++
++def _scan_log(data: bytes) -> tuple[list[bytes], int]:
++    """The logical records of a log-format file, and the offset where the
++    last intact physical record ends.
++
++    A record that fails its checksum or runs past its block drops the rest
++    of that block, as LevelDB's reader does: a write torn by a crash costs
++    its own block and nothing after it.
++    """
++    records: list[bytes] = []
++    pending: bytearray | None = None
++    pos = clean_end = 0
++    size = len(data)
++    while pos < size:
++        left = BLOCK_SIZE - pos % BLOCK_SIZE
++        if left < _HEADER_SIZE or pos + _HEADER_SIZE > size:
++            pos += left
++            continue
++        checksum, length, kind = struct.unpack_from("<IHB", data, pos)
++        start = pos + _HEADER_SIZE
++        end = start + length
++        intact = (
++            kind in (_FULL, _FIRST, _MIDDLE, _LAST)
++            and length <= left - _HEADER_SIZE
++            and end <= size
++            and _masked(crc32c(data[pos + 6:end])) == checksum
++        )
++        if not intact:
++            pos += left
++            pending = None
++            continue
++        payload = data[start:end]
++        pos = clean_end = end
++        if kind == _FULL:
++            pending = None
++            records.append(payload)
++        elif kind == _FIRST:
++            pending = bytearray(payload)
++        elif pending is not None:
++            pending += payload
++            if kind == _LAST:
++                records.append(bytes(pending))
++                pending = None
++    return records, clean_end
++
++
++def log_records(data: bytes) -> list[bytes]:
++    """The logical records of a log-format file, in order."""
++    return _scan_log(data)[0]
++
++
++def encode_log_records(payload: bytes, offset: int) -> bytes:
++    """``payload`` as physical records for a log whose next byte is
++    ``offset``: split at block boundaries, each piece with its own header."""
++    out = bytearray()
++    pos = offset
++    first = True
++    while True:
++        left = BLOCK_SIZE - pos % BLOCK_SIZE
++        if left < _HEADER_SIZE:
++            out += b"\x00" * left
++            pos += left
++            continue
++        piece, payload = payload[:left - _HEADER_SIZE], payload[left - _HEADER_SIZE:]
++        last = not payload
++        if first:
++            kind = _FULL if last else _FIRST
++        else:
++            kind = _LAST if last else _MIDDLE
++        checksum = _masked(crc32c(bytes([kind]) + piece))
++        out += struct.pack("<IHB", checksum, len(piece), kind) + piece
++        pos += _HEADER_SIZE + len(piece)
++        first = False
++        if last:
++            return bytes(out)
++
++
++def encode_put(sequence: int, key: bytes, value: bytes) -> bytes:
++    """A write batch holding one put, as the write-ahead log stores it."""
++    return (
++        struct.pack("<QI", sequence, 1)
++        + bytes([_PUT])
++        + encode_varint(len(key)) + key
++        + encode_varint(len(value)) + value
++    )
++
++
++def _batch_entries(record: bytes) -> Iterator[tuple[int, bytes, bytes | None]]:
++    sequence, count = struct.unpack_from("<QI", record, 0)
++    pos = 12
++    for i in range(count):
++        tag = record[pos]
++        pos += 1
++        length, pos = _varint(record, pos)
++        key = record[pos:pos + length]
++        pos += length
++        if tag == _PUT:
++            length, pos = _varint(record, pos)
++            yield sequence + i, key, record[pos:pos + length]
++            pos += length
++        elif tag == _DELETE:
++            yield sequence + i, key, None
++        else:
++            raise ValueError(f"unknown write batch tag {tag}")
++
++
++# -- table format --------------------------------------------------------------
++
++
++def snappy_decompress(data: bytes) -> bytes:
++    """Decode one Snappy block (the raw format, no framing)."""
++    size, pos = _varint(data, 0)
++    out = bytearray()
++    end = len(data)
++    while pos < end:
++        tag = data[pos]
++        pos += 1
++        kind = tag & 3
++        if kind == 0:  # literal
++            length = tag >> 2
++            if length >= 60:
++                width = length - 59
++                length = int.from_bytes(data[pos:pos + width], "little")
++                pos += width
++            length += 1
++            if pos + length > end:
++                raise ValueError("snappy literal runs past the input")
++            out += data[pos:pos + length]
++            pos += length
++            continue
++        if kind == 1:
++            length = ((tag >> 2) & 7) + 4
++            offset = ((tag >> 5) << 8) | data[pos]
++            pos += 1
++        else:
++            width = 2 if kind == 2 else 4
++            length = (tag >> 2) + 1
++            offset = int.from_bytes(data[pos:pos + width], "little")
++            pos += width
++        if offset == 0 or offset > len(out):
++            raise ValueError("snappy copy points outside the output")
++        start = len(out) - offset
++        if offset >= length:
++            out += out[start:start + length]
++        else:  # the copy overlaps what it writes: a run
++            for i in range(length):
++                out.append(out[start + i])
++    if len(out) != size:
++        raise ValueError("snappy output has the wrong length")
++    return bytes(out)
++
++
++def _read_block(data: bytes, offset: int, size: int) -> bytes:
++    if offset + size + 5 > len(data):
++        raise ValueError("table block runs past the file")
++    raw = data[offset:offset + size]
++    compression = data[offset + size]
++    (checksum,) = struct.unpack_from("<I", data, offset + size + 1)
++    if _masked(crc32c(data[offset:offset + size + 1])) != checksum:
++        raise ValueError("table block fails its checksum")
++    if compression == 0:
++        return raw
++    if compression == 1:
++        return snappy_decompress(raw)
++    raise ValueError(f"table block uses unsupported compression {compression}")
++
++
++def _block_entries(block: bytes) -> Iterator[tuple[bytes, bytes]]:
++    (restarts,) = struct.unpack_from("<I", block, len(block) - 4)
++    limit = len(block) - 4 - 4 * restarts
++    if limit < 0:
++        raise ValueError("table block has a bad restart array")
++    pos = 0
++    key = b""
++    while pos < limit:
++        shared, pos = _varint(block, pos)
++        unshared, pos = _varint(block, pos)
++        length, pos = _varint(block, pos)
++        key = key[:shared] + block[pos:pos + unshared]
++        pos += unshared
++        yield key, block[pos:pos + length]
++        pos += length
++
++
++def _table_entries(data: bytes) -> Iterator[tuple[int, bytes, bytes | None]]:
++    if len(data) < _FOOTER_SIZE:
++        raise ValueError("table file is shorter than its footer")
++    footer = data[-_FOOTER_SIZE:]
++    if struct.unpack_from("<Q", footer, 40)[0] != _TABLE_MAGIC:
++        raise ValueError("table file has no LevelDB footer")
++    pos = 0
++    _, pos = _varint(footer, pos)  # metaindex block offset
++    _, pos = _varint(footer, pos)  # metaindex block size
++    index_offset, pos = _varint(footer, pos)
++    index_size, pos = _varint(footer, pos)
++    for _, handle in _block_entries(_read_block(data, index_offset, index_size)):
++        offset, at = _varint(handle, 0)
++        size, _ = _varint(handle, at)
++        for internal_key, value in _block_entries(_read_block(data, offset, size)):
++            if len(internal_key) < 8:
++                raise ValueError("table key is shorter than its trailer")
++            (trailer,) = struct.unpack_from("<Q", internal_key, len(internal_key) - 8)
++            yield (
++                trailer >> 8,
++                internal_key[:-8],
++                value if trailer & 0xFF == _PUT else None,
++            )
++
++
++# -- MANIFEST -------------------------------------------------------------------
++
++
++@dataclass
++class _Version:
++    log_number: int = 0
++    prev_log_number: int = 0
++    last_sequence: int = 0
++    tables: frozenset[int] = frozenset()
++
++
++def _read_manifest(data: bytes) -> _Version:
++    version = _Version()
++    tables: set[int] = set()
++    for record in log_records(data):
++        pos = 0
++        while pos < len(record):
++            tag, pos = _varint(record, pos)
++            if tag == 1:  # comparator name
++                length, pos = _varint(record, pos)
++                name = record[pos:pos + length]
++                pos += length
++                if name != b"leveldb.BytewiseComparator":
++                    raise ValueError(f"unsupported key order {name!r}")
++            elif tag == 2:
++                version.log_number, pos = _varint(record, pos)
++            elif tag == 9:
++                version.prev_log_number, pos = _varint(record, pos)
++            elif tag == 3:  # next file number
++                _, pos = _varint(record, pos)
++            elif tag == 4:
++                version.last_sequence, pos = _varint(record, pos)
++            elif tag == 5:  # compaction pointer: level, key
++                _, pos = _varint(record, pos)
++                length, pos = _varint(record, pos)
++                pos += length
++            elif tag == 6:  # deleted file: level, number
++                _, pos = _varint(record, pos)
++                number, pos = _varint(record, pos)
++                tables.discard(number)
++            elif tag == 7:  # new file: level, number, size, smallest, largest
++                _, pos = _varint(record, pos)
++                number, pos = _varint(record, pos)
++                _, pos = _varint(record, pos)
++                for _ in range(2):
++                    length, pos = _varint(record, pos)
++                    pos += length
++                tables.add(number)
++            else:
++                raise ValueError(f"unknown MANIFEST tag {tag}")
++    version.tables = frozenset(tables)
++    return version
++
++
++# -- database -------------------------------------------------------------------
++
++
++@dataclass(frozen=True)
++class Snapshot:
++    """What a database held when it was read.
++
++    ``entries`` maps every key ever seen to its newest value, None for a key
++    whose newest entry is a deletion. ``live_log`` is the write-ahead log
++    the next write belongs in, None when the database has none.
++    """
++
++    entries: dict[bytes, bytes | None]
++    last_sequence: int
++    live_log: Path | None
++
++    def get(self, key: bytes) -> bytes | None:
++        return self.entries.get(key)
++
++
++def _table_path(directory: Path, number: int) -> Path:
++    for suffix in (".ldb", ".sst"):  # .sst is the name before LevelDB 1.14
++        path = directory / f"{number:06d}{suffix}"
++        if path.exists():
++            return path
++    raise FileNotFoundError(f"table {number:06d} is missing from {directory}")
++
++
++def read_db(directory: Path) -> Snapshot:
++    """Read every key's newest value from the database in ``directory``.
++
++    Raises:
++        LevelDBError: the directory holds no database, or a file in it does
++            not parse. A database being written by another process can fail
++            this way between two of its own file operations; reading again
++            succeeds.
++    """
++    try:
++        current = (directory / "CURRENT").read_text(encoding="ascii").strip()
++        version = _read_manifest((directory / current).read_bytes())
++        newest: dict[bytes, tuple[int, bytes | None]] = {}
++        last_sequence = version.last_sequence
++
++        def see(sequence: int, key: bytes, value: bytes | None) -> None:
++            held = newest.get(key)
++            if held is None or sequence >= held[0]:
++                newest[key] = (sequence, value)
++
++        for number in sorted(version.tables):
++            for entry in _table_entries(_table_path(directory, number).read_bytes()):
++                see(*entry)
++        logs = sorted(
++            (int(path.stem), path)
++            for path in directory.glob("*.log")
++            if path.stem.isdigit()
++            and (
++                int(path.stem) >= version.log_number
++                or int(path.stem) == version.prev_log_number
++            )
++        )
++        for _, path in logs:
++            for record in log_records(path.read_bytes()):
++                for sequence, key, value in _batch_entries(record):
++                    see(sequence, key, value)
++                    last_sequence = max(last_sequence, sequence)
++    except (OSError, ValueError, IndexError, struct.error) as exc:
++        raise LevelDBError(f"could not read the LevelDB database in {directory}: {exc}") from exc
++    return Snapshot(
++        entries={key: value for key, (_, value) in newest.items()},
++        last_sequence=last_sequence,
++        live_log=logs[-1][1] if logs else None,
++    )
++
++
++def put(directory: Path, key: bytes, value: bytes) -> None:
++    """Set ``key`` to ``value`` by appending one write to the live log.
++
++    The caller holds :func:`locked` for ``directory``. The write takes the
++    next sequence number after everything already in the database, so it
++    wins over every earlier entry for the key. A log whose tail is torn (the
++    last writer died mid-record) is padded to its next block first: a reader
++    drops the rest of a block at the first bad record, and the new record
++    must not sit in that part.
++
++    Raises:
++        LevelDBError: the database could not be read, has no write-ahead
++            log to append to, or the write did not read back.
++    """
++    snapshot = read_db(directory)
++    log = snapshot.live_log
++    if log is None:
++        raise LevelDBError(f"the LevelDB database in {directory} has no write-ahead log")
++    try:
++        data = log.read_bytes()
++        _, clean_end = _scan_log(data)
++        padding = b""
++        if clean_end != len(data) and len(data) % BLOCK_SIZE:
++            padding = b"\x00" * (BLOCK_SIZE - len(data) % BLOCK_SIZE)
++        record = encode_log_records(
++            encode_put(snapshot.last_sequence + 1, key, value),
++            len(data) + len(padding),
++        )
++        with open(log, "ab") as handle:
++            handle.write(padding + record)
++            handle.flush()
++            os.fsync(handle.fileno())
++    except OSError as exc:
++        raise LevelDBError(f"could not write to {log}: {exc}") from exc
++    if read_db(directory).get(key) != value:
++        raise LevelDBError(f"the write to {log} did not read back")
++
++
++@contextmanager
++def locked(directory: Path) -> Iterator[None]:
++    """Hold the database's ``LOCK`` file the way LevelDB does.
++
++    LevelDB takes an exclusive advisory lock on ``LOCK`` for as long as it
++    has the database open, so failing to take it here means a process is
++    using the database. On Windows LevelDB holds the file open without
++    sharing instead; opening it for writing fails the same way there.
++
++    Raises:
++        LevelDBError: another process has the database open.
++    """
++    path = directory / "LOCK"
++    try:
++        handle = open(path, "r+b" if path.exists() else "w+b")
++    except OSError as exc:
++        raise LevelDBError(
++            f"the LevelDB database in {directory} is in use by another process ({exc})"
++        ) from exc
++    try:
++        if sys.platform != "win32":
++            import fcntl
++
++            try:
++                fcntl.lockf(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
++            except OSError as exc:
++                raise LevelDBError(
++                    f"the LevelDB database in {directory} is in use by another process"
++                ) from exc
++        yield
++    finally:
++        handle.close()
+diff --git a/src/claude_swap/macos_keychain.py b/src/claude_swap/macos_keychain.py
+index e4270a6226b82df1a7a91aaa2b1aa9bf04202675..78084d2cfc0ec72d3d230a24383e626a1657e2ff 100644
+--- a/src/claude_swap/macos_keychain.py
++++ b/src/claude_swap/macos_keychain.py
+@@ -106,23 +106,26 @@ def _quote(value: str) -> str:
+     return f'"{escaped}"'
+ 
+ 
+-def get_password(service: str, account: str) -> str | None:
++def get_password(
++    service: str, account: str, *, timeout: float = _TIMEOUT
++) -> str | None:
+     """Return the stored password, or ``None`` if no such item exists (rc 44).
+ 
+     Raises :class:`KeychainError` on any other non-zero exit (locked / denied /
+     unavailable) or a timeout, so a genuine miss is not confused with a transient
+-    failure.
++    failure. ``timeout`` is for an item another application created: macOS asks
++    the user before handing that over, and the answer takes longer than a read.
+     """
+     try:
+         result = spawn.run(
+             [_SECURITY, "find-generic-password", "-a", account, "-w", "-s", service],
+             capture_output=True,
+             text=True,
+-            timeout=_TIMEOUT,
++            timeout=timeout,
+         )
+     except subprocess.TimeoutExpired as e:
+         raise KeychainError(
+-            f"security find-generic-password timed out after {_TIMEOUT}s"
++            f"security find-generic-password timed out after {timeout}s"
+         ) from e
+     if result.returncode == 0:
+         # `-w` prints the value followed by one newline; strip exactly that so
+diff --git a/src/claude_swap/settings.py b/src/claude_swap/settings.py
+index d7dae81787a390bda3031ad56f4b7287d4a6ab2d..3bdf2b6d5992397627f96a66165e9f79319e5285 100644
+--- a/src/claude_swap/settings.py
++++ b/src/claude_swap/settings.py
+@@ -139,10 +139,14 @@ class DesktopSettings:
+     tab's local sessions, agent-mode state, Spaces keys) from the stock
+     profile into every account's profile, so a window opened through cswap
+     lists the same local sessions as the stock app. Not on Windows.
++    ``env_source`` names the account (number, alias or email) whose Code
++    tab environments ``cswap desktop --sync-envs`` copies when no ``--from``
++    is given.
+     """
+ 
+     app_path: str | None = None
+     share_sessions: bool = True
++    env_source: str | None = None
+ 
+ 
+ @dataclass(frozen=True)
+@@ -272,6 +276,10 @@ SETTING_SPECS: dict[str, SettingSpec] = {
+             "desktop", "shareSessions", "share_sessions", "bool",
+             help="cswap desktop shares the stock profile's local sessions with every account",
+         ),
++        SettingSpec(
++            "desktop", "envSource", "env_source", "string",
++            help="Account whose environments cswap desktop --sync-envs copies (default: --from)",
++        ),
+         SettingSpec(
+             "chrome", "appPath", "app_path", "string",
+             help="Browser that cswap chrome opens (default: the stock Google Chrome install)",
+@@ -637,7 +645,20 @@ def load_desktop_settings(backup_root: Path) -> DesktopSettings:
+             share_sessions, default.share_sessions,
+         )
+         share_sessions = default.share_sessions
+-    return DesktopSettings(app_path=app_path or None, share_sessions=share_sessions)
++    env_source = section.get("envSource", default.env_source)
++    if isinstance(env_source, int) and not isinstance(env_source, bool):
++        env_source = str(env_source)  # a bare slot number, hand-edited
++    if env_source is not None and not isinstance(env_source, str):
++        _logger.warning(
++            "settings.json: desktop.envSource must be a string, got %r; ignoring",
++            env_source,
++        )
++        env_source = default.env_source
++    return DesktopSettings(
++        app_path=app_path or None,
++        share_sessions=share_sessions,
++        env_source=env_source or None,
++    )
+ 
+ 
+ def load_chrome_settings(backup_root: Path) -> ChromeSettings:
+diff --git a/tests/conftest.py b/tests/conftest.py
+index cbc8a995e5885bf174fbcaf1e63e9b53e5bdee94..f089887af41d8e8c2dfbfe9acfc09abcb3fef81c 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -451,7 +451,9 @@ class _KeychainStore:
+         self.data: dict[tuple[str, str], str] = {}
+ 
+     # Mirrors the ``macos_keychain`` (security CLI) contract.
+-    def get_password(self, service: str, account: str) -> str | None:
++    def get_password(
++        self, service: str, account: str, *, timeout: float | None = None
++    ) -> str | None:
+         return self.data.get((service, account))
+ 
+     def item_exists(self, service: str, account: str) -> bool:
+diff --git a/tests/test_config_cli.py b/tests/test_config_cli.py
+index db51e0a7bc8de911035fe6985a9eec6cf45ffc71..b71c7ad9571eebfdc7ee7820fc33d28ec3258640 100644
+--- a/tests/test_config_cli.py
++++ b/tests/test_config_cli.py
+@@ -56,12 +56,13 @@ class TestConfigList:
+             "usage.fableProbe",
+             "desktop.appPath",
+             "desktop.shareSessions",
++            "desktop.envSource",
+             "chrome.appPath",
+             "chrome.cloneStockProfile",
+             "chrome.followSwitch",
+         ):
+             assert key in out
+-        assert out.count("(default)") == 19
++        assert out.count("(default)") == 20
+ 
+     def test_set_key_not_marked_default(self, temp_home, capsys):
+         _run(["set", "autoswitch.cooldownSeconds", "600"], capsys)
+@@ -88,7 +89,7 @@ class TestConfigList:
+         assert payload["schemaVersion"] == 1
+         assert payload["path"].endswith("settings.json")
+         by_key = {entry["key"]: entry for entry in payload["settings"]}
+-        assert len(by_key) == 19
++        assert len(by_key) == 20
+         assert by_key["autoswitch.threshold"]["value"] == 90.0
+         assert by_key["autoswitch.threshold"]["isSet"] is False
+         # An unset weekly line reports null, not the threshold it falls back
+diff --git a/tests/test_desktop_envs.py b/tests/test_desktop_envs.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..f361b1360c93806cdf2b5185355585ff3da65c62
+--- /dev/null
++++ b/tests/test_desktop_envs.py
+@@ -0,0 +1,540 @@
++"""``cswap desktop --sync-envs``: one account's Code tab environments
++replace another's.
++
++Claude Desktop keeps an account's environments in the profile's
++``localStorage`` (a LevelDB database) under the account's UUID, mirrors
++them in ``ccd-session-presets.json``, keeps SSH connections in
++``ssh_configs.json`` and environment variables, encrypted, in
++``ccd-environment-config.json``. The profiles here are built with the
++LevelDB fixtures of ``test_leveldb.py``.
++"""
++
++from __future__ import annotations
++
++import base64
++import json
++import re
++import sys
++from pathlib import Path
++from unittest.mock import patch
++
++import pytest
++
++from claude_swap import cli, desktop, desktop_envs, leveldb
++from claude_swap.desktop import DesktopManager
++from claude_swap.desktop_envs import (
++    ENV_FILE,
++    MIRROR_FILE,
++    SSH_FILE,
++    SafeStorage,
++    leveldb_dir,
++    store_key,
++)
++from claude_swap.exceptions import ConfigError, SessionError
++from claude_swap.models import Platform
++from claude_swap.settings import load_desktop_settings, set_setting, settings_path
++from claude_swap.switcher import ClaudeAccountSwitcher
++from tests.test_leveldb import _batch, build_db
++
++ONE, TWO = "1. account1@example.com", "2. account2@example.com"
++macos_only = pytest.mark.skipif(sys.platform != "darwin", reason="CommonCrypto")
++
++
++def _plain(text: str) -> str:
++    return re.sub(r"\x1b\[[0-9;]*m", "", text)
++
++
++def _store(*names: str, extra: dict | None = None) -> bytes:
++    """A store value the way the renderer writes it: Latin-1 JSON behind
++    the one-byte encoding prefix."""
++    state = {
++        "presets": [{"id": f"id-{n}", "name": n} for n in names],
++        "placeDefaults": {"local::/tmp": {"effort": "high"}},
++        **(extra or {}),
++    }
++    return b"\x01" + json.dumps({"state": state, "version": 4}).encode("latin-1")
++
++
++def _profile(data_dir: Path, stores: dict[str, bytes]) -> Path:
++    """A profile the app has run in, holding ``stores`` by account UUID and
++    one unrelated ``localStorage`` entry."""
++    writes = [(b"_https://claude.ai\x00\x01unrelated", b"\x01kept")]
++    writes += [(store_key(account), value) for account, value in stores.items()]
++    build_db(leveldb_dir(data_dir), batches=[_batch(1, writes)])
++    return data_dir
++
++
++def _entries(data_dir: Path) -> dict[bytes, bytes | None]:
++    return leveldb.read_db(leveldb_dir(data_dir)).entries
++
++
++@pytest.fixture
++def switcher(temp_home, sample_sequence_data):
++    sw = ClaudeAccountSwitcher()
++    sw._setup_directories()
++    sample_sequence_data["sequence"].append(3)
++    sample_sequence_data["accounts"]["3"] = {
++        "email": "account3@example.com", "uuid": "uuid-3",
++        "added": "2024-01-03T00:00:00Z",
++    }
++    sw._write_json(sw.sequence_file, sample_sequence_data)
++    return sw
++
++
++@pytest.fixture
++def stock(tmp_path):
++    """The stock profile's location, signed in as nobody until a test
++    writes its ``config.json``."""
++    path = tmp_path / "Application Support" / "Claude"
++    with patch.object(desktop, "default_user_data_dir", return_value=path):
++        yield path
++
++
++@pytest.fixture
++def manager(switcher, stock, tmp_path):
++    """A manager on macOS with every window closed unless a test says so."""
++    m = DesktopManager(switcher)
++    m.platform = Platform.MACOS
++    m._app = tmp_path / "Claude.app"
++    with patch.object(desktop, "running_pids", return_value=[]), \
++         patch.object(desktop, "stock_instance_running", return_value=False):
++        yield m
++
++
++def _own(manager, number: str) -> Path:
++    return manager.data_dir(number, f"account{number}@example.com")
++
++
++def _sign_stock_in(stock: Path, account_uuid: str) -> None:
++    stock.mkdir(parents=True, exist_ok=True)
++    (stock / "config.json").write_text(json.dumps({"lastKnownAccountUuid": account_uuid}))
++
++
++class TestStore:
++    def test_key_is_chromiums_local_storage_key(self):
++        assert store_key("uuid-1") == (
++            b"_https://claude.ai\x00\x01persisted.ccd-session-presets.uuid-1"
++        )
++
++    def test_the_target_gets_the_sources_value_byte_for_byte(self, manager, capsys):
++        source = _store("OPS", "Leina", extra={"startedPlaces": [{"id": "p"}]})
++        _profile(_own(manager, "1"), {"uuid-1": source})
++        target = _profile(_own(manager, "2"), {"uuid-2": _store("old"), "uuid-9": b"\x01x"})
++
++        assert manager.sync_envs(["2"], source="1") == 0
++
++        assert _entries(target) == {
++            b"_https://claude.ai\x00\x01unrelated": b"\x01kept",
++            store_key("uuid-2"): source,
++            store_key("uuid-9"): b"\x01x",
++        }
++        assert _entries(_own(manager, "1"))[store_key("uuid-1")] == source
++        out = _plain(capsys.readouterr().out)
++        assert f"copying from {ONE} (2 environment(s))" in out
++        assert f"{TWO} synced" in out and "previous state kept under" in out
++
++    def test_a_value_in_another_shape_is_still_copied(self, manager, capsys):
++        _profile(_own(manager, "1"), {"uuid-1": b"\x01not json at all"})
++        target = _profile(_own(manager, "2"), {})
++        assert manager.sync_envs(["2"], source="1") == 0
++        assert _entries(target)[store_key("uuid-2")] == b"\x01not json at all"
++        assert f"copying from {ONE}\n" in _plain(capsys.readouterr().out)
++
++    def test_the_stock_profile_is_the_source_when_signed_in_as_it(self, manager, stock):
++        _sign_stock_in(stock, "uuid-1")
++        _profile(stock, {"uuid-1": _store("from stock")})
++        _profile(_own(manager, "1"), {"uuid-1": _store("stale copy")})
++        target = _profile(_own(manager, "2"), {})
++        assert manager.sync_envs(["2"], source="1") == 0
++        assert _entries(target)[store_key("uuid-2")] == _store("from stock")
++
++    def test_a_stock_profile_signed_in_as_someone_else_is_not_a_source(
++        self, manager, stock
++    ):
++        _sign_stock_in(stock, "uuid-3")
++        _profile(stock, {"uuid-1": _store("left behind by an old login")})
++        _profile(_own(manager, "1"), {"uuid-1": _store("own")})
++        target = _profile(_own(manager, "2"), {})
++        assert manager.sync_envs(["2"], source="1") == 0
++        assert _entries(target)[store_key("uuid-2")] == _store("own")
++
++    def test_every_profile_of_the_target_is_written(self, manager, stock):
++        _profile(_own(manager, "1"), {"uuid-1": _store("a")})
++        _sign_stock_in(stock, "uuid-2")
++        _profile(stock, {"uuid-2": _store("old")})
++        _profile(_own(manager, "2"), {"uuid-2": _store("older")})
++        assert manager.sync_envs(["2"], source="1") == 0
++        assert _entries(stock)[store_key("uuid-2")] == _store("a")
++        assert _entries(_own(manager, "2"))[store_key("uuid-2")] == _store("a")
++
++
++class TestTargets:
++    @pytest.fixture(autouse=True)
++    def source(self, manager):
++        _profile(_own(manager, "1"), {"uuid-1": _store("a")})
++
++    def test_all_follows_the_source_and_skips_it(self, manager, capsys):
++        two = _profile(_own(manager, "2"), {})
++        assert manager.sync_envs([], all_accounts=True, source="1") == 0
++        assert _entries(two)[store_key("uuid-2")] == _store("a")
++        out = _plain(capsys.readouterr().out)
++        assert f"{TWO} synced" in out
++        assert "3. account3@example.com never opened, nothing to sync" in out
++        assert "copied from" not in out and f"{ONE} synced" not in out
++
++    def test_naming_the_source_as_a_target_is_an_error(self, manager, capsys):
++        assert manager.sync_envs(["1"], source="1") == 1
++        assert "is the account being copied from" in _plain(capsys.readouterr().err)
++
++    def test_unknown_target_fails_without_blocking_the_rest(self, manager, capsys):
++        two = _profile(_own(manager, "2"), {})
++        assert manager.sync_envs(["nobody", "2"], source="1") == 1
++        assert _entries(two)[store_key("uuid-2")] == _store("a")
++        assert "nobody: account not found" in _plain(capsys.readouterr().err)
++
++    def test_an_open_window_is_refused_and_left_alone(self, manager, capsys):
++        two = _profile(_own(manager, "2"), {"uuid-2": _store("mine")})
++        with patch.object(desktop, "running_pids", return_value=[41, 42]):
++            assert manager.sync_envs(["2"], source="1") == 1
++        assert _entries(two)[store_key("uuid-2")] == _store("mine")
++        err = _plain(capsys.readouterr().err)
++        assert "Claude Desktop open (PID 41, 42)" in err
++        assert "cswap desktop --quit 2" in err
++
++    def test_an_open_stock_window_blocks_every_profile_of_the_account(
++        self, manager, stock, capsys
++    ):
++        _sign_stock_in(stock, "uuid-2")
++        _profile(stock, {"uuid-2": _store("mine")})
++        own = _profile(_own(manager, "2"), {"uuid-2": _store("mine too")})
++        with patch.object(desktop, "stock_instance_running", return_value=True):
++            assert manager.sync_envs(["2"], source="1") == 1
++        assert _entries(stock)[store_key("uuid-2")] == _store("mine")
++        assert _entries(own)[store_key("uuid-2")] == _store("mine too")
++        assert "open on the stock profile" in _plain(capsys.readouterr().err)
++
++    def test_a_database_in_use_changes_nothing(self, manager, capsys):
++        two = _profile(_own(manager, "2"), {"uuid-2": _store("mine")})
++        with patch.object(
++            leveldb, "locked", side_effect=leveldb.LevelDBError("in use by another process")
++        ):
++            assert manager.sync_envs(["2"], source="1") == 1
++        assert _entries(two)[store_key("uuid-2")] == _store("mine")
++        assert "in use by another process; nothing was changed" in _plain(
++            capsys.readouterr().err
++        )
++
++
++class TestSource:
++    def test_from_wins_over_the_setting(self, manager):
++        set_setting(manager.switcher.backup_dir, "desktop.envSource", "3")
++        _profile(_own(manager, "1"), {"uuid-1": _store("a")})
++        two = _profile(_own(manager, "2"), {})
++        assert manager.sync_envs(["2"], source="1") == 0
++        assert _entries(two)[store_key("uuid-2")] == _store("a")
++
++    def test_the_setting_is_the_default(self, manager):
++        set_setting(manager.switcher.backup_dir, "desktop.envSource", "account1@example.com")
++        _profile(_own(manager, "1"), {"uuid-1": _store("a")})
++        two = _profile(_own(manager, "2"), {})
++        assert manager.sync_envs(["2"]) == 0
++        assert _entries(two)[store_key("uuid-2")] == _store("a")
++
++    def test_no_source_names_both_ways_to_give_one(self, manager):
++        with pytest.raises(ConfigError, match="--from <num\\|email>.*desktop.envSource"):
++            manager.sync_envs(["2"])
++
++    def test_unknown_source_says_where_it_came_from(self, manager):
++        with pytest.raises(ConfigError, match="--from nobody: account not found"):
++            manager.sync_envs(["2"], source="nobody")
++        set_setting(manager.switcher.backup_dir, "desktop.envSource", "gone")
++        with pytest.raises(ConfigError, match="desktop.envSource gone: account not found"):
++            manager.sync_envs(["2"])
++
++    def test_a_source_with_nothing_to_copy_is_an_error(self, manager):
++        _profile(_own(manager, "1"), {})
++        _profile(_own(manager, "2"), {"uuid-2": _store("mine")})
++        with pytest.raises(SessionError, match="has no environments on this machine yet"):
++            manager.sync_envs(["2"], source="1")
++
++
++class TestProfileFiles:
++    def test_the_mirror_bucket_follows_and_other_buckets_stay(self, manager):
++        one = _profile(_own(manager, "1"), {"uuid-1": _store("a")})
++        two = _profile(_own(manager, "2"), {})
++        (one / MIRROR_FILE).write_text(json.dumps({"byAccount": {
++            "uuid-1": {"presets": [{"id": "id-a"}], "seededFromDraft": True},
++        }}))
++        (two / MIRROR_FILE).write_text(json.dumps({"byAccount": {
++            "uuid-2": {"presets": []}, "uuid-9": {"presets": [{"id": "theirs"}]},
++        }}))
++        assert manager.sync_envs(["2"], source="1") == 0
++        assert json.loads((two / MIRROR_FILE).read_text()) == {"byAccount": {
++            "uuid-2": {"presets": [{"id": "id-a"}], "seededFromDraft": True},
++            "uuid-9": {"presets": [{"id": "theirs"}]},
++        }}
++
++    def test_ssh_connections_are_added_by_id_and_the_source_wins(self, manager):
++        one = _profile(_own(manager, "1"), {"uuid-1": _store("a")})
++        two = _profile(_own(manager, "2"), {})
++        (one / SSH_FILE).write_text(json.dumps({
++            "configs": [{"id": "box", "sshHost": "new.example"}, {"id": "lab", "sshHost": "lab"}],
++            "trustedHosts": ["new.example", "lab"],
++        }))
++        (two / SSH_FILE).write_text(json.dumps({
++            "configs": [{"id": "box", "sshHost": "old.example"}, {"id": "mine", "sshHost": "m"}],
++            "trustedHosts": ["m", "lab"],
++        }))
++        assert manager.sync_envs(["2"], source="1") == 0
++        assert json.loads((two / SSH_FILE).read_text()) == {
++            "configs": [
++                {"id": "box", "sshHost": "new.example"},
++                {"id": "lab", "sshHost": "lab"},
++                {"id": "mine", "sshHost": "m"},
++            ],
++            "trustedHosts": ["new.example", "lab", "m"],
++        }
++
++    def test_a_source_without_ssh_connections_leaves_the_targets(self, manager):
++        _profile(_own(manager, "1"), {"uuid-1": _store("a")})
++        two = _profile(_own(manager, "2"), {})
++        (two / SSH_FILE).write_text('{"configs": [{"id": "mine"}]}')
++        assert manager.sync_envs(["2"], source="1") == 0
++        assert (two / SSH_FILE).read_text() == '{"configs": [{"id": "mine"}]}'
++        assert not (two / MIRROR_FILE).exists()
++
++
++class TestBackup:
++    @pytest.fixture(autouse=True)
++    def profiles(self, manager):
++        _profile(_own(manager, "1"), {"uuid-1": _store("a")})
++        self.two = _profile(_own(manager, "2"), {"uuid-2": _store("mine")})
++        (self.two / SSH_FILE).write_text('{"configs": []}')
++        (_own(manager, "1") / SSH_FILE).write_text('{"configs": [{"id": "box"}]}')
++
++    def _runs(self, manager) -> list[Path]:
++        root = manager.switcher.backup_dir / "history-conflicts" / "desktop-envs-2-account2_example.com"
++        return sorted(root.iterdir()) if root.is_dir() else []
++
++    def test_the_previous_state_is_kept(self, manager):
++        assert manager.sync_envs(["2"], source="1") == 0
++        (run,) = self._runs(manager)
++        assert leveldb.read_db(run / "leveldb").get(store_key("uuid-2")) == _store("mine")
++        assert (run / SSH_FILE).read_text() == '{"configs": []}'
++
++    def test_only_the_newest_runs_are_kept(self, manager):
++        for _ in range(5):
++            assert manager.sync_envs(["2"], source="1") == 0
++        assert len(self._runs(manager)) == desktop_envs.BACKUPS_KEPT
++
++    def test_a_failed_step_puts_the_profile_back(self, manager, capsys):
++        before = {
++            path.relative_to(self.two): path.read_bytes()
++            for path in sorted(self.two.rglob("*")) if path.is_file()
++        }
++        real_put = leveldb.put
++
++        def put_then_fail(directory, key, value):
++            real_put(directory, key, value)
++            raise leveldb.LevelDBError("disk full")
++
++        with patch.object(leveldb, "put", side_effect=put_then_fail):
++            assert manager.sync_envs(["2"], source="1") == 1
++        after = {
++            path.relative_to(self.two): path.read_bytes()
++            for path in sorted(self.two.rglob("*")) if path.is_file()
++        }
++        assert after == before
++        assert self._runs(manager) == []
++        assert "disk full; the profile was put back as it was" in _plain(
++            capsys.readouterr().err
++        )
++
++
++def _seal(storage: SafeStorage, value: dict) -> str:
++    return storage.encrypt(json.dumps(value))
++
++
++@macos_only
++class TestEnvironmentVariables:
++    """``safeStorage`` on macOS: one Keychain password for every profile,
++    so a value sealed in one profile opens in another."""
++
++    @pytest.fixture
++    def storage(self, block_real_keychain):
++        block_real_keychain.set_password("Claude Safe Storage", "Claude", "test-password")
++        return SafeStorage(Platform.MACOS)
++
++    @pytest.fixture(autouse=True)
++    def profiles(self, manager):
++        self.one = _profile(_own(manager, "1"), {"uuid-1": _store("a")})
++        self.two = _profile(_own(manager, "2"), {})
++
++    def test_matches_chromiums_os_crypt(self, storage):
++        # openssl enc -aes-128-cbc with the PBKDF2 key of "test-password"
++        sealed = base64.b64encode(
++            b"v10" + bytes.fromhex("4f2e9f07d07d8fbad5fc80461d26cbc4")
++        ).decode()
++        assert storage.decrypt(sealed) == "hello env"
++        assert storage.encrypt("hello env") == sealed
++
++    def test_variables_move_to_the_targets_account(self, manager, storage, capsys):
++        global_vars = _seal(storage, {"HTTP_PROXY": "http://proxy"})
++        (self.one / ENV_FILE).write_text(json.dumps({
++            "envVars": global_vars,
++            "tmpDirOverride": "/tmp/x",
++            "scopedEnvVars": _seal(storage, {
++                "uuid-1": {"id-a": {"TOKEN": "s3cret"}},
++                "uuid-7": {"other": {"X": "1"}},
++            }),
++        }))
++        (self.two / ENV_FILE).write_text(json.dumps({
++            "envVars": _seal(storage, {"OLD": "1"}),
++            "scopedEnvVars": _seal(storage, {
++                "uuid-2": {"gone": {"OLD": "1"}},
++                "uuid-9": {"theirs": {"KEEP": "1"}},
++            }),
++            "unrelated": True,
++        }))
++        assert manager.sync_envs(["2"], source="1") == 0
++        written = json.loads((self.two / ENV_FILE).read_text())
++        assert written["envVars"] == global_vars
++        assert written["tmpDirOverride"] == "/tmp/x" and written["unrelated"] is True
++        assert storage.decrypt_scopes(written["scopedEnvVars"]) == {
++            "uuid-2": {"id-a": {"TOKEN": "s3cret"}},
++            "uuid-9": {"theirs": {"KEEP": "1"}},
++        }
++        out = _plain(capsys.readouterr().out)
++        assert "Safe Storage key from the Keychain" in out and "s3cret" not in out
++
++    def test_a_source_without_variables_clears_the_targets(self, manager, storage):
++        (self.two / ENV_FILE).write_text(json.dumps({
++            "envVars": _seal(storage, {"OLD": "1"}),
++            "tmpDirOverride": "/tmp/old",
++            "scopedEnvVars": _seal(storage, {
++                "uuid-2": {"gone": {"OLD": "1"}},
++                "uuid-9": {"theirs": {"KEEP": "1"}},
++            }),
++        }))
++        assert manager.sync_envs(["2"], source="1") == 0
++        written = json.loads((self.two / ENV_FILE).read_text())
++        assert set(written) == {"scopedEnvVars"}
++        assert storage.decrypt_scopes(written["scopedEnvVars"]) == {
++            "uuid-9": {"theirs": {"KEEP": "1"}},
++        }
++
++    def test_no_variables_anywhere_never_asks_the_keychain(
++        self, manager, block_real_keychain, capsys
++    ):
++        with patch.object(block_real_keychain, "get_password") as read:
++            assert manager.sync_envs(["2"], source="1") == 0
++        read.assert_not_called()
++        assert not (self.two / ENV_FILE).exists()
++        assert "Keychain" not in capsys.readouterr().out
++
++    def test_a_refused_key_still_syncs_the_environments(self, manager, capsys):
++        (self.one / ENV_FILE).write_text(json.dumps({"scopedEnvVars": "djEwAAAA"}))
++        (self.two / ENV_FILE).write_text('{"envVars": "kept"}')
++        assert manager.sync_envs(["2"], source="1") == 1
++        assert _entries(self.two)[store_key("uuid-2")] == _store("a")
++        assert (self.two / ENV_FILE).read_text() == '{"envVars": "kept"}'
++        out = _plain(capsys.readouterr().out)
++        assert "environment variables are not copied" in out
++        assert "no 'Claude Safe Storage' item" in out
++        assert f"{TWO} synced" in out
++
++    def test_a_target_that_does_not_decrypt_keeps_its_variables(
++        self, manager, storage, capsys
++    ):
++        (self.one / ENV_FILE).write_text(json.dumps({
++            "scopedEnvVars": _seal(storage, {"uuid-1": {"id-a": {"K": "v"}}}),
++        }))
++        (self.two / ENV_FILE).write_text('{"scopedEnvVars": "bm90IHNlYWxlZA=="}')
++        assert manager.sync_envs(["2"], source="1") == 1
++        assert (self.two / ENV_FILE).read_text() == '{"scopedEnvVars": "bm90IHNlYWxlZA=="}'
++        assert _entries(self.two)[store_key("uuid-2")] == _store("a")
++        assert "its environment variables were left as they were" in _plain(
++            capsys.readouterr().out
++        )
++
++
++class TestEnvironmentVariablesElsewhere:
++    def test_another_platform_says_so_and_leaves_them(self, manager, capsys):
++        manager.platform = Platform.LINUX
++        one = _profile(_own(manager, "1"), {"uuid-1": _store("a")})
++        two = _profile(_own(manager, "2"), {})
++        (one / ENV_FILE).write_text('{"envVars": "sealed"}')
++        (two / ENV_FILE).write_text('{"scopedEnvVars": "theirs"}')
++        assert manager.sync_envs(["2"], source="1") == 1
++        assert (two / ENV_FILE).read_text() == '{"scopedEnvVars": "theirs"}'
++        assert _entries(two)[store_key("uuid-2")] == _store("a")
++        assert "a key this platform keeps per profile" in _plain(capsys.readouterr().out)
++
++    def test_another_platform_without_variables_is_quiet(self, manager, capsys):
++        manager.platform = Platform.LINUX
++        _profile(_own(manager, "1"), {"uuid-1": _store("a")})
++        two = _profile(_own(manager, "2"), {})
++        (two / ENV_FILE).write_text('{"scopedEnvVars": "theirs"}')
++        assert manager.sync_envs(["2"], source="1") == 0
++        assert (two / ENV_FILE).read_text() == '{"scopedEnvVars": "theirs"}'
++        assert "environment variables" not in capsys.readouterr().out
++
++
++class TestSettings:
++    def test_round_trip(self, tmp_path):
++        assert load_desktop_settings(tmp_path).env_source is None
++        set_setting(tmp_path, "desktop.envSource", "work")
++        assert load_desktop_settings(tmp_path).env_source == "work"
++
++    def test_a_bare_slot_number_is_read_as_one(self, tmp_path):
++        settings_path(tmp_path).write_text('{"desktop": {"envSource": 2}}')
++        assert load_desktop_settings(tmp_path).env_source == "2"
++
++    def test_wrong_type_is_ignored(self, tmp_path):
++        settings_path(tmp_path).write_text('{"desktop": {"envSource": ["1"]}}')
++        assert load_desktop_settings(tmp_path).env_source is None
++
++
++class TestCli:
++    def _run(self, argv):
++        with patch("claude_swap.cli.ClaudeAccountSwitcher"), \
++             patch("claude_swap.cli._guard_root"), \
++             patch("claude_swap.desktop.DesktopManager") as cls:
++            cls.return_value.sync_envs.return_value = 0
++            cli._desktop_command(argv)
++        return cls.return_value
++
++    def test_routes_to_the_manager(self, temp_home):
++        manager = self._run(["--sync-envs", "2", "--from", "1"])
++        manager.sync_envs.assert_called_once_with(["2"], False, "1")
++        manager.open.assert_not_called()
++
++    def test_all_without_from_uses_the_setting(self, temp_home):
++        manager = self._run(["--sync-envs", "--all"])
++        manager.sync_envs.assert_called_once_with([], True, None)
++
++    def test_exit_code_follows_the_manager(self, temp_home):
++        with patch("claude_swap.cli.ClaudeAccountSwitcher"), \
++             patch("claude_swap.cli._guard_root"), \
++             patch("claude_swap.desktop.DesktopManager") as cls:
++            cls.return_value.sync_envs.return_value = 1
++            with pytest.raises(SystemExit) as exc:
++                cli._desktop_command(["--sync-envs", "2", "--from", "1"])
++        assert exc.value.code == 1
++
++    @pytest.mark.parametrize("argv, message", [
++        (["--sync-envs"], "--sync-envs needs an account or --all"),
++        (["--sync-envs", "--quit", "2"], "--quit and --sync-envs are exclusive"),
++        (["2", "--from", "1"], "--from only applies to --sync-envs"),
++    ])
++    def test_usage_errors(self, temp_home, capsys, argv, message):
++        with pytest.raises(SystemExit) as exc:
++            cli._desktop_command(argv)
++        assert exc.value.code == 2
++        assert message in capsys.readouterr().err
++
++    def test_listed_in_help(self, temp_home, capsys):
++        with patch.object(sys, "argv", ["claude-swap", "--help"]), \
++             pytest.raises(SystemExit):
++            cli.main()
++        assert "desktop --sync-envs <num|email> --from <num|email>" in capsys.readouterr().out
+diff --git a/tests/test_leveldb.py b/tests/test_leveldb.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..600197124dc8b2bcdbb22190ec63e398b3d97f24
+--- /dev/null
++++ b/tests/test_leveldb.py
+@@ -0,0 +1,318 @@
++"""``leveldb.py``: reading a LevelDB database and appending one write.
++
++The fixtures are built here byte by byte from LevelDB's documented formats
++(``doc/log_format.md``, ``doc/table_format.md``, ``db/version_edit.cc``), not
++by the module under test, so a mistake in the module's reading of a format
++does not cancel out against the same mistake in a writer.
++"""
++
++from __future__ import annotations
++
++import struct
++import subprocess
++import sys
++from pathlib import Path
++
++import pytest
++
++from claude_swap import leveldb
++from claude_swap.leveldb import LevelDBError, crc32c, encode_varint, snappy_decompress
++
++Entry = tuple[int, bytes, "bytes | None"]
++
++
++def _mask(crc: int) -> int:
++    return (((crc >> 15) | (crc << 17)) + 0xA282EAD8) & 0xFFFFFFFF
++
++
++def _log(records: list[bytes]) -> bytes:
++    """A log-format file holding ``records``, split at 32 KiB blocks."""
++    out = bytearray()
++    for payload in records:
++        first = True
++        while True:
++            left = 32768 - len(out) % 32768
++            if left < 7:
++                out += b"\x00" * left
++                continue
++            piece, payload = payload[:left - 7], payload[left - 7:]
++            last = not payload
++            kind = (1 if last else 2) if first else (4 if last else 3)
++            out += struct.pack("<IHB", _mask(crc32c(bytes([kind]) + piece)), len(piece), kind)
++            out += piece
++            first = False
++            if last:
++                break
++    return bytes(out)
++
++
++def _batch(sequence: int, writes: list[tuple[bytes, bytes | None]]) -> bytes:
++    out = bytearray(struct.pack("<QI", sequence, len(writes)))
++    for key, value in writes:
++        out += bytes([0 if value is None else 1]) + encode_varint(len(key)) + key
++        if value is not None:
++            out += encode_varint(len(value)) + value
++    return bytes(out)
++
++
++def _snappy_literals(data: bytes) -> bytes:
++    """``data`` as a Snappy block made of literals only."""
++    out = bytearray(encode_varint(len(data)))
++    for start in range(0, len(data), 256):
++        piece = data[start:start + 256]
++        out += bytes([60 << 2, len(piece) - 1]) + piece
++    return bytes(out)
++
++
++def _block(pairs: list[tuple[bytes, bytes]]) -> bytes:
++    """A table block with one restart point; later keys share a prefix
++    with the key before them, as LevelDB writes them."""
++    out = bytearray()
++    previous = b""
++    for index, (key, value) in enumerate(pairs):
++        shared = 0
++        if index:
++            while shared < min(len(key), len(previous)) and key[shared] == previous[shared]:
++                shared += 1
++        out += encode_varint(shared) + encode_varint(len(key) - shared)
++        out += encode_varint(len(value)) + key[shared:] + value
++        previous = key
++    out += struct.pack("<II", 0, 1)
++    return bytes(out)
++
++
++def _table(entries: list[Entry], *, snappy: bool = False) -> bytes:
++    """A table file with one data block holding ``entries``."""
++    pairs = [
++        (key + struct.pack("<Q", (sequence << 8) | (0 if value is None else 1)), value or b"")
++        for sequence, key, value in entries
++    ]
++    out = bytearray()
++
++    def add(block: bytes, compress: bool) -> bytes:
++        body = _snappy_literals(block) if compress else block
++        kind = bytes([1 if compress else 0])
++        handle = encode_varint(len(out)) + encode_varint(len(body))
++        out.extend(body + kind + struct.pack("<I", _mask(crc32c(body + kind))))
++        return handle
++
++    data_handle = add(_block(pairs), snappy)
++    meta_handle = add(_block([]), False)
++    index_handle = add(_block([(pairs[-1][0], data_handle)]), False)
++    footer = meta_handle + index_handle
++    out += footer + b"\x00" * (40 - len(footer)) + struct.pack("<Q", 0xDB4775248B80FB57)
++    return bytes(out)
++
++
++def _new_file(number: int) -> bytes:
++    return (
++        encode_varint(7) + encode_varint(0) + encode_varint(number) + encode_varint(1)
++        + encode_varint(1) + b"a" + encode_varint(1) + b"z"
++    )
++
++
++def build_db(
++    directory: Path,
++    *,
++    tables: dict[int, bytes] | None = None,
++    batches: list[bytes] | None = None,
++    log_number: int = 3,
++    last_sequence: int = 0,
++    extra_edits: list[bytes] | None = None,
++) -> Path:
++    """Write a database into ``directory``: ``tables`` by file number,
++    ``batches`` in a live log (None for no log file at all)."""
++    directory.mkdir(parents=True, exist_ok=True)
++    comparator = b"leveldb.BytewiseComparator"
++    edit = (
++        encode_varint(1) + encode_varint(len(comparator)) + comparator
++        + encode_varint(2) + encode_varint(log_number)
++        + encode_varint(3) + encode_varint(log_number + 1)
++        + encode_varint(4) + encode_varint(last_sequence)
++    )
++    for number in tables or {}:
++        edit += _new_file(number)
++    (directory / "MANIFEST-000001").write_bytes(_log([edit, *(extra_edits or [])]))
++    (directory / "CURRENT").write_text("MANIFEST-000001\n")
++    (directory / "LOCK").write_bytes(b"")
++    for number, data in (tables or {}).items():
++        (directory / f"{number:06d}.ldb").write_bytes(data)
++    if batches is not None:
++        (directory / f"{log_number:06d}.log").write_bytes(_log(batches))
++    return directory
++
++
++class TestPrimitives:
++    def test_crc32c_matches_the_standard_check_value(self):
++        assert crc32c(b"123456789") == 0xE3069283
++
++    def test_snappy_literals_and_copies(self):
++        literal = bytes([2 << 2]) + b"abc"
++        short_copy = bytes([((9 - 4) << 2) | 1, 3])  # 9 bytes from 3 back: a run
++        far_copy = bytes([((3 - 1) << 2) | 2]) + struct.pack("<H", 12)
++        data = encode_varint(15) + literal + short_copy + far_copy
++        assert snappy_decompress(data) == b"abcabcabcabcabc"
++
++    def test_snappy_long_literal(self):
++        payload = bytes(range(256)) * 3
++        assert snappy_decompress(_snappy_literals(payload)) == payload
++
++    @pytest.mark.parametrize("data", [
++        encode_varint(3) + bytes([((4 - 4) << 2) | 1, 9]),  # copy before the start
++        encode_varint(9) + bytes([2 << 2]) + b"abc",        # shorter than declared
++        encode_varint(3) + bytes([9 << 2]) + b"abc",        # literal past the input
++    ])
++    def test_snappy_rejects_a_malformed_block(self, data):
++        with pytest.raises(ValueError):
++            snappy_decompress(data)
++
++    def test_log_records_survive_a_block_boundary(self):
++        records = [b"a" * 40000, b"b" * 5, b"c" * 70000]
++        assert leveldb.log_records(_log(records)) == records
++
++    def test_a_torn_record_costs_its_block_and_nothing_after_it(self):
++        intact = _log([b"first"])
++        torn = intact + b"\xff" * 20
++        torn += b"\x00" * (32768 - len(torn)) + _log([b"second"])
++        assert leveldb.log_records(torn) == [b"first", b"second"]
++
++    def test_encoded_records_continue_an_existing_log(self):
++        head = _log([b"x" * 32700])
++        tail = leveldb.encode_log_records(b"y" * 50000, len(head))
++        assert leveldb.log_records(head + tail) == [b"x" * 32700, b"y" * 50000]
++
++
++class TestRead:
++    def test_newest_sequence_wins_across_tables_and_the_log(self, tmp_path):
++        db = build_db(
++            tmp_path / "db",
++            tables={
++                5: _table([(1, b"k1", b"old"), (2, b"k2", b"table")]),
++                7: _table([(4, b"k1", b"newer"), (5, b"k3", b"gone soon")], snappy=True),
++            },
++            batches=[
++                _batch(8, [(b"k3", None), (b"k4", b"log")]),
++                _batch(10, [(b"k4", b"log again")]),
++            ],
++            last_sequence=5,
++        )
++        snapshot = leveldb.read_db(db)
++        assert snapshot.entries == {
++            b"k1": b"newer", b"k2": b"table", b"k3": None, b"k4": b"log again",
++        }
++        assert snapshot.get(b"k3") is None and snapshot.get(b"missing") is None
++        assert snapshot.last_sequence == 10
++        assert snapshot.live_log == db / "000003.log"
++
++    def test_keys_sharing_a_prefix_are_rebuilt(self, tmp_path):
++        entries = [(i + 1, b"_https://claude.ai\x00\x01key-%d" % i, b"v%d" % i) for i in range(4)]
++        db = build_db(tmp_path / "db", tables={5: _table(entries)}, batches=[])
++        assert leveldb.read_db(db).entries == {key: value for _, key, value in entries}
++
++    def test_a_table_the_manifest_dropped_is_not_read(self, tmp_path):
++        dropped = encode_varint(6) + encode_varint(0) + encode_varint(5)
++        db = build_db(
++            tmp_path / "db",
++            tables={5: _table([(1, b"k", b"compacted away")]), 9: _table([(2, b"k", b"kept")])},
++            batches=[], extra_edits=[dropped],
++        )
++        (db / "000005.ldb").unlink()
++        assert leveldb.read_db(db).entries == {b"k": b"kept"}
++
++    def test_a_log_older_than_the_manifests_is_ignored(self, tmp_path):
++        db = build_db(tmp_path / "db", batches=[_batch(4, [(b"k", b"live")])], log_number=6)
++        (db / "000002.log").write_bytes(_log([_batch(9, [(b"k", b"already in a table")])]))
++        assert leveldb.read_db(db).entries == {b"k": b"live"}
++
++    def test_not_a_database(self, tmp_path):
++        with pytest.raises(LevelDBError, match="could not read"):
++            leveldb.read_db(tmp_path)
++
++    def test_a_corrupt_table_is_an_error_not_a_guess(self, tmp_path):
++        table = bytearray(_table([(1, b"k", b"v")]))
++        table[2] ^= 0xFF
++        db = build_db(tmp_path / "db", tables={5: bytes(table)}, batches=[])
++        with pytest.raises(LevelDBError, match="checksum"):
++            leveldb.read_db(db)
++
++    def test_another_key_order_is_refused(self, tmp_path):
++        db = build_db(tmp_path / "db", batches=[])
++        name = b"custom.Comparator"
++        (db / "MANIFEST-000001").write_bytes(
++            _log([encode_varint(1) + encode_varint(len(name)) + name])
++        )
++        with pytest.raises(LevelDBError, match="unsupported key order"):
++            leveldb.read_db(db)
++
++
++class TestPut:
++    def test_the_write_outranks_everything_before_it(self, tmp_path):
++        db = build_db(
++            tmp_path / "db",
++            tables={5: _table([(40, b"k", b"table")])},
++            batches=[_batch(41, [(b"other", b"kept")])],
++            last_sequence=40,
++        )
++        leveldb.put(db, b"k", b"written")
++        snapshot = leveldb.read_db(db)
++        assert snapshot.entries == {b"k": b"written", b"other": b"kept"}
++        assert snapshot.last_sequence == 42
++
++    def test_a_value_larger_than_a_block(self, tmp_path):
++        db = build_db(tmp_path / "db", batches=[_batch(1, [(b"a", b"b")])])
++        value = bytes(range(256)) * 400
++        leveldb.put(db, b"big", value)
++        leveldb.put(db, b"after", b"still readable")
++        entries = leveldb.read_db(db).entries
++        assert entries[b"big"] == value and entries[b"after"] == b"still readable"
++
++    def test_a_torn_tail_does_not_swallow_the_write(self, tmp_path):
++        db = build_db(tmp_path / "db", batches=[_batch(1, [(b"a", b"b")])])
++        with open(db / "000003.log", "ab") as handle:
++            handle.write(b"\x13\x37" * 9)
++        leveldb.put(db, b"k", b"v")
++        assert leveldb.read_db(db).entries == {b"a": b"b", b"k": b"v"}
++        assert (db / "000003.log").stat().st_size > 32768
++
++    def test_an_empty_log_takes_the_write(self, tmp_path):
++        db = build_db(tmp_path / "db", batches=[], last_sequence=7)
++        leveldb.put(db, b"k", b"v")
++        snapshot = leveldb.read_db(db)
++        assert snapshot.entries == {b"k": b"v"} and snapshot.last_sequence == 8
++
++    def test_no_log_to_append_to(self, tmp_path):
++        db = build_db(tmp_path / "db", batches=None)
++        with pytest.raises(LevelDBError, match="no write-ahead log"):
++            leveldb.put(db, b"k", b"v")
++
++
++class TestLock:
++    def test_free_database_locks(self, tmp_path):
++        db = build_db(tmp_path / "db", batches=[])
++        with leveldb.locked(db):
++            pass
++
++    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX advisory lock")
++    def test_a_database_another_process_holds_is_refused(self, tmp_path):
++        db = build_db(tmp_path / "db", batches=[])
++        holder = subprocess.Popen(
++            [
++                sys.executable, "-c",
++                "import fcntl, sys\n"
++                "f = open(sys.argv[1], 'r+b')\n"
++                "fcntl.lockf(f, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
++                "print('held', flush=True)\n"
++                "sys.stdin.read()\n",
++                str(db / "LOCK"),
++            ],
++            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
++        )
++        try:
++            assert holder.stdout.readline().strip() == "held"
++            with pytest.raises(LevelDBError, match="in use by another process"):
++                with leveldb.locked(db):
++                    pass
++        finally:
++            holder.communicate("")
++        with leveldb.locked(db):
++            pass

@@ -48,6 +48,8 @@ Claude Desktop 同一时间只能登录一个账户。`cswap desktop 2` 会在�
 
 <img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
+`cswap desktop --sync-envs 2 --from 1` 会用账户 1 的副本替换账户 2 在 Code 标签页中的环境：包括本地和 SSH 环境、它们的设置，以及 macOS 上的环境变量。请先关闭账户 2 的窗口。替换前的状态会保留在备份目录中。
+
 ### 每个账户一个 Chrome profile
 
 Claude in Chrome 使用浏览器里登录的 claude.ai 账户，而不是 `cswap switch` 选中的账户 ([上游 #256](https://github.com/realiti4/claude-swap/issues/256))。`cswap chrome 2` 会用你的 Chrome profile 的一份独立副本打开账户 2。其中的扩展以账户 2 运行，主浏览器的登录不受影响。
@@ -68,14 +70,15 @@ Claude in Chrome 使用浏览器里登录的 claude.ai 账户，而不是 `cswap
 
 `upstream.json` 固定了一个上游 commit。`bun run setup` 会把该 commit 原样克隆到 `cswap/`，再按 [patches/.patches](../../patches/.patches) 中的顺序，用 `git am` 应用 `patches/` 下的所有补丁。这套结构参考了 [Electron 管理 Chromium 和 Node 补丁的方式](https://github.com/electron/electron/tree/main/patches)。每个 diff 都保持小而易读，升级上游只需对补丁序列做一次 rebase。
 
-| 补丁                                                                                                                       | 变更                  |
-| -------------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| [以当前凭据的实际所有者为准](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | 修复：账户配置过期    |
-| [以实际安装的发行包为准](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)        | 修复：版本与升级      |
-| [按需刷新用量](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)                | 功能：`cswap refresh` |
-| [按账户打开 Claude Desktop](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)       | 功能：`cswap desktop` |
-| [按账户打开 Chrome](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)               | 功能：`cswap chrome`  |
-| [保留旧版存下的历史共享选择](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)        | 修复：旧的历史设置    |
+| 补丁                                                                                                                       | 变更                              |
+| -------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| [以当前凭据的实际所有者为准](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | 修复：账户配置过期                |
+| [以实际安装的发行包为准](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)        | 修复：版本与升级                  |
+| [按需刷新用量](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)                | 功能：`cswap refresh`             |
+| [按账户打开 Claude Desktop](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)       | 功能：`cswap desktop`             |
+| [按账户打开 Chrome](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)               | 功能：`cswap chrome`              |
+| [保留旧版存下的历史共享选择](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)        | 修复：旧的历史设置                |
+| [同步 Claude Desktop 环境](../../patches/feat_sync_claude_desktop_environments_from_one_account_to_another.patch)          | 功能：`cswap desktop --sync-envs` |
 
 每个补丁对应一个 commit，提交信息中说明了对应的上游问题。如需从源码构建或修改补丁，请参阅 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
 

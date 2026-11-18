@@ -48,6 +48,8 @@ Claude Desktop은 한 번에 하나의 로그인만 유지합니다. `cswap desk
 
 <img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
+`cswap desktop --sync-envs 2 --from 1`은 계정 2의 Code 탭 환경을 계정 1의 사본으로 교체합니다. 로컬 및 SSH 환경과 그 설정, 그리고 macOS에서는 환경 변수까지 포함됩니다. 먼저 계정 2의 창을 닫으세요. 이전 상태는 백업 디렉터리에 보관됩니다.
+
 ### 계정별 Chrome 프로필
 
 Claude in Chrome은 `cswap switch`로 선택한 계정이 아니라 브라우저의 claude.ai 로그인을 사용합니다([업스트림 #256](https://github.com/realiti4/claude-swap/issues/256)). `cswap chrome 2`는 Chrome 프로필의 별도 사본에서 계정 2를 엽니다. 그 안의 확장 프로그램은 계정 2로 동작하고, 기본 브라우저는 기존 로그인을 그대로 유지합니다.
@@ -68,14 +70,15 @@ Claude in Chrome은 `cswap switch`로 선택한 계정이 아니라 브라우저
 
 `upstream.json`은 업스트림 커밋 하나를 고정합니다. `bun run setup`은 해당 커밋을 수정 없이 `cswap/`에 클론한 뒤, `patches/`의 모든 패치를 [patches/.patches](../../patches/.patches)에 나열된 순서대로 `git am`으로 적용합니다. 이는 [Electron이 Chromium과 Node 패치에 사용하는 구조](https://github.com/electron/electron/tree/main/patches)를 따릅니다. 각 diff는 작고 읽기 쉽게 유지되며, 새 업스트림으로 옮기는 작업은 패치 시리즈를 리베이스하는 것으로 끝납니다.
 
-| 패치                                                                                                                           | 변경 내용               |
-| ------------------------------------------------------------------------------------------------------------------------------ | ----------------------- |
-| [현재 자격 증명의 소유자 따르기](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | 수정: 오래된 계정 설정  |
-| [설치된 배포 패키지 따르기](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)         | 수정: 버전과 업그레이드 |
-| [필요할 때 사용량 새로고침](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)       | 기능: `cswap refresh`   |
-| [계정별 Claude Desktop 열기](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)          | 기능: `cswap desktop`   |
-| [계정별 Chrome 열기](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                  | 기능: `cswap chrome`    |
-| [이전 기록 공유 선택 유지하기](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)          | 수정: 이전 기록 설정    |
+| 패치                                                                                                                           | 변경 내용                         |
+| ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------- |
+| [현재 자격 증명의 소유자 따르기](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | 수정: 오래된 계정 설정            |
+| [설치된 배포 패키지 따르기](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)         | 수정: 버전과 업그레이드           |
+| [필요할 때 사용량 새로고침](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)       | 기능: `cswap refresh`             |
+| [계정별 Claude Desktop 열기](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)          | 기능: `cswap desktop`             |
+| [계정별 Chrome 열기](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                  | 기능: `cswap chrome`              |
+| [이전 기록 공유 선택 유지하기](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)          | 수정: 이전 기록 설정              |
+| [Claude Desktop 환경 동기화](../../patches/feat_sync_claude_desktop_environments_from_one_account_to_another.patch)            | 기능: `cswap desktop --sync-envs` |
 
 각 패치는 단일 커밋이며, 커밋 메시지에 업스트림의 문제가 설명되어 있습니다. 소스에서 빌드하거나 패치 작업을 하려면 [CONTRIBUTING.md](../../CONTRIBUTING.md)를 참고하세요.
 
