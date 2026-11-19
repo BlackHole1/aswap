@@ -48,6 +48,8 @@ Claude Desktop solo admite un inicio de sesión a la vez. `cswap desktop 2` abre
 
 <img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
+`cswap desktop --sync-envs 2 --from 1` reemplaza los entornos de la pestaña Code de la cuenta 2 por una copia de los de la cuenta 1: entornos locales y SSH, su configuración y, en macOS, sus variables de entorno. Cierra antes todas las instancias de Claude Desktop con la sesión de la cuenta 2: su propia ventana y también la aplicación normal si tiene iniciada esa cuenta. El estado anterior se conserva en el directorio de copias de seguridad.
+
 ### Un perfil de Chrome por cuenta
 
 Claude in Chrome usa la sesión de claude.ai del navegador, no la cuenta elegida con `cswap switch` ([upstream #256](https://github.com/realiti4/claude-swap/issues/256)). `cswap chrome 2` abre la cuenta 2 en una copia independiente de tu perfil de Chrome. Allí la extensión funciona con la cuenta 2, y tu navegador principal conserva su propia sesión.
@@ -76,6 +78,7 @@ Claude in Chrome usa la sesión de claude.ai del navegador, no la cuenta elegida
 | [Abrir Claude Desktop por cuenta](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)                    | Función: `cswap desktop`                     |
 | [Abrir Chrome por cuenta](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                            | Función: `cswap chrome`                      |
 | [Conservar la elección anterior sobre el historial](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)    | Corrección: ajuste de historial anterior     |
+| [Sincronizar los entornos de Claude Desktop](../../patches/feat_sync_claude_desktop_environments_from_one_account_to_another.patch)           | Función: `cswap desktop --sync-envs`         |
 
 Cada parche es un único commit, y su mensaje explica el problema en upstream. Para compilar desde el código fuente o trabajar en los parches, consulta [CONTRIBUTING.md](../../CONTRIBUTING.md).
 

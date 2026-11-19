@@ -48,6 +48,8 @@ Claude Desktop поддерживает только один вход в акк
 
 <img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
+`cswap desktop --sync-envs 2 --from 1` заменяет окружения вкладки Code аккаунта 2 копией окружений аккаунта 1: локальные и SSH-окружения, их настройки и, в macOS, переменные окружения. Сначала закройте все экземпляры Claude Desktop, в которых выполнен вход в аккаунт 2: его собственное окно, а также обычное приложение, если в нём открыт этот аккаунт. Прежнее состояние сохраняется в каталоге резервных копий.
+
 ### Отдельный профиль Chrome для каждого аккаунта
 
 Claude in Chrome использует вход в claude.ai из браузера, а не аккаунт, выбранный через `cswap switch` ([upstream #256](https://github.com/realiti4/claude-swap/issues/256)). `cswap chrome 2` открывает аккаунт 2 в отдельной копии вашего профиля Chrome. Расширение в ней работает от имени аккаунта 2, а основной браузер сохраняет свой вход.
@@ -76,6 +78,7 @@ Claude in Chrome использует вход в claude.ai из браузер�
 | [Claude Desktop для каждого аккаунта](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)                  | Функция: `cswap desktop`                      |
 | [Chrome для каждого аккаунта](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                          | Функция: `cswap chrome`                       |
 | [Сохранение прежнего выбора общей истории](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)               | Исправление: прежняя настройка истории        |
+| [Синхронизация окружений Claude Desktop](../../patches/feat_sync_claude_desktop_environments_from_one_account_to_another.patch)                 | Функция: `cswap desktop --sync-envs`          |
 
 Каждый патч представляет собой один коммит, а его сообщение описывает проблему в upstream. Сборка из исходников и работа с патчами описаны в [CONTRIBUTING.md](../../CONTRIBUTING.md).
 

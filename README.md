@@ -48,6 +48,8 @@ Claude Desktop holds one login at a time. `cswap desktop 2` opens account 2 in i
 
 <img src="docs/images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
+`cswap desktop --sync-envs 2 --from 1` replaces account 2's Code tab environments with a copy of account 1's: local and SSH environments, their settings, and on macOS their environment variables. Quit every Claude Desktop signed in as account 2 first: its own window, and the regular app too if that is signed in as account 2. The previous state is kept in the backup directory.
+
 ### One Chrome profile per account
 
 Claude in Chrome uses the browser's claude.ai login, not the account picked by `cswap switch` ([upstream #256](https://github.com/realiti4/claude-swap/issues/256)). `cswap chrome 2` opens account 2 in a separate copy of your Chrome profile. The extension there runs as account 2, and your main browser keeps its own login.
@@ -68,14 +70,15 @@ Claude in Chrome uses the browser's claude.ai login, not the account picked by `
 
 `upstream.json` pins one upstream commit. `bun run setup` clones that commit unchanged into `cswap/`. It then applies every patch in `patches/` with `git am`, in the order listed in [patches/.patches](patches/.patches). This follows [the layout Electron uses for its Chromium and Node patches](https://github.com/electron/electron/tree/main/patches). Each diff stays small and readable, and moving to a newer upstream is a rebase of the series.
 
-| Patch                                                                                                                        | Change                       |
-| ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
-| [Follow the live credential's owner](patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | Fix: stale account config    |
-| [Follow the installed distribution](patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)     | Fix: version and upgrade     |
-| [Refresh usage on demand](patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)             | Feature: `cswap refresh`     |
-| [Open Claude Desktop per account](patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)         | Feature: `cswap desktop`     |
-| [Open Chrome per account](patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                 | Feature: `cswap chrome`      |
-| [Keep the earlier share-history choice](patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)     | Fix: earlier history setting |
+| Patch                                                                                                                        | Change                               |
+| ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| [Follow the live credential's owner](patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | Fix: stale account config            |
+| [Follow the installed distribution](patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)     | Fix: version and upgrade             |
+| [Refresh usage on demand](patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)             | Feature: `cswap refresh`             |
+| [Open Claude Desktop per account](patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)         | Feature: `cswap desktop`             |
+| [Open Chrome per account](patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                 | Feature: `cswap chrome`              |
+| [Keep the earlier share-history choice](patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)     | Fix: earlier history setting         |
+| [Sync Claude Desktop environments](patches/feat_sync_claude_desktop_environments_from_one_account_to_another.patch)          | Feature: `cswap desktop --sync-envs` |
 
 Each patch is a single commit, and its message explains the upstream problem. To build from source or work on patches, see [CONTRIBUTING.md](CONTRIBUTING.md).
 

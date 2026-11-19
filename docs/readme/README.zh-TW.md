@@ -48,6 +48,8 @@ Claude Desktop 同一時間只能登入一個帳號。`cswap desktop 2` 會在�
 
 <img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
+`cswap desktop --sync-envs 2 --from 1` 會用帳號 1 的副本取代帳號 2 在 Code 分頁中的環境：包括本機和 SSH 環境、它們的設定，以及 macOS 上的環境變數。請先結束所有登入帳號 2 的 Claude Desktop：除了它的獨立視窗，如果一般應用程式登入的也是帳號 2，也要一併結束。取代前的狀態會保留在備份目錄中。
+
 ### 每個帳號一個 Chrome 設定檔
 
 Claude in Chrome 使用瀏覽器中登入的 claude.ai 帳號，而不是 `cswap switch` 選定的帳號 ([上游 #256](https://github.com/realiti4/claude-swap/issues/256))。`cswap chrome 2` 會以你的 Chrome 設定檔的一份獨立副本開啟帳號 2。其中的擴充功能以帳號 2 執行，主瀏覽器的登入不受影響。
@@ -68,14 +70,15 @@ Claude in Chrome 使用瀏覽器中登入的 claude.ai 帳號，而不是 `cswap
 
 `upstream.json` 固定了一個上游 commit。`bun run setup` 會把該 commit 原樣複製到 `cswap/`，再依 [patches/.patches](../../patches/.patches) 中的順序，以 `git am` 套用 `patches/` 下的所有修補。這套結構參考了 [Electron 管理 Chromium 與 Node 修補的方式](https://github.com/electron/electron/tree/main/patches)。每個 diff 都保持精簡易讀，升級上游只需對修補序列做一次 rebase。
 
-| 修補                                                                                                                       | 變更                  |
-| -------------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| [以目前憑證的實際擁有者為準](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | 修正：帳號設定過期    |
-| [以實際安裝的發行套件為準](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)      | 修正：版本與升級      |
-| [隨時重新整理用量](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)            | 功能：`cswap refresh` |
-| [依帳號開啟 Claude Desktop](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)       | 功能：`cswap desktop` |
-| [依帳號開啟 Chrome](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)               | 功能：`cswap chrome`  |
-| [保留舊版存下的紀錄共用選擇](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)        | 修正：舊的紀錄設定    |
+| 修補                                                                                                                       | 變更                              |
+| -------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| [以目前憑證的實際擁有者為準](../../patches/fix_follow_the_live_credentials_owner_when_the_config_names_another_slot.patch) | 修正：帳號設定過期                |
+| [以實際安裝的發行套件為準](../../patches/feat_report_check_and_upgrade_the_distribution_this_install_came_from.patch)      | 修正：版本與升級                  |
+| [隨時重新整理用量](../../patches/feat_add_a_refresh_command_that_fetches_usage_now_one_account_at_a_time.patch)            | 功能：`cswap refresh`             |
+| [依帳號開啟 Claude Desktop](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)       | 功能：`cswap desktop`             |
+| [依帳號開啟 Chrome](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)               | 功能：`cswap chrome`              |
+| [保留舊版存下的紀錄共用選擇](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)        | 修正：舊的紀錄設定                |
+| [同步 Claude Desktop 環境](../../patches/feat_sync_claude_desktop_environments_from_one_account_to_another.patch)          | 功能：`cswap desktop --sync-envs` |
 
 每個修補對應一個 commit，提交訊息中說明了對應的上游問題。若要從原始碼建置或修改修補，請參閱 [CONTRIBUTING.md](../../CONTRIBUTING.md)。
 

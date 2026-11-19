@@ -48,6 +48,8 @@ Claude Desktop ne garde qu'une connexion à la fois. `cswap desktop 2` ouvre le 
 
 <img src="../images/cswap-desktop.png" alt="cswap desktop --all opening one Claude Desktop window per account, then cswap desktop listing both as open" width="820">
 
+`cswap desktop --sync-envs 2 --from 1` remplace les environnements de l'onglet Code du compte 2 par une copie de ceux du compte 1 : environnements locaux et SSH, leurs réglages et, sous macOS, leurs variables d'environnement. Quittez d'abord toutes les instances de Claude Desktop connectées au compte 2 : sa propre fenêtre, ainsi que l'application habituelle si elle est connectée à ce compte. L'état précédent est conservé dans le répertoire de sauvegarde.
+
 ### Un profil Chrome par compte
 
 Claude in Chrome utilise la connexion claude.ai du navigateur, et non le compte choisi avec `cswap switch` ([upstream #256](https://github.com/realiti4/claude-swap/issues/256)). `cswap chrome 2` ouvre le compte 2 dans une copie distincte de votre profil Chrome. L'extension y fonctionne avec le compte 2, et votre navigateur principal conserve sa propre connexion.
@@ -76,6 +78,7 @@ Claude in Chrome utilise la connexion claude.ai du navigateur, et non le compte 
 | [Ouvrir Claude Desktop par compte](../../patches/feat_open_claude_desktop_as_a_stored_account_one_window_per_account.patch)                   | Fonctionnalité : `cswap desktop`             |
 | [Ouvrir Chrome par compte](../../patches/feat_open_chrome_as_a_stored_account_so_claude_in_chrome_follows_it.patch)                           | Fonctionnalité : `cswap chrome`              |
 | [Conserver l'ancien choix de partage de l'historique](../../patches/fix_keep_the_share_history_choice_an_earlier_aswap_release_stored.patch)  | Correctif : ancien réglage de l'historique   |
+| [Synchroniser les environnements de Claude Desktop](../../patches/feat_sync_claude_desktop_environments_from_one_account_to_another.patch)    | Fonctionnalité : `cswap desktop --sync-envs` |
 
 Chaque patch est un commit unique, dont le message explique le problème amont. Pour compiler depuis les sources ou travailler sur les patchs, consultez [CONTRIBUTING.md](../../CONTRIBUTING.md).
 
