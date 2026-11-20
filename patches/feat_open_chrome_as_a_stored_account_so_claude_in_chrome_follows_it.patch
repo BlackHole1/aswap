@@ -41,6 +41,16 @@ the extension's silent re-auth is keyed to the previous account and
 stops with a sign-in prompt, and its interactive sign-in takes the
 account the browser is signed in as.
 
+Chrome guards every extension's record and a few other preferences with
+two integrity values under `protection` in `Secure Preferences`: an HMAC
+and a hash encrypted with the browser's OS key. A browser started with
+`--user-data-dir` rejects the encrypted hashes the stock profile wrote
+and resets all of those preferences a moment after it starts, which
+leaves the copied extensions reported as corrupted and deletes their
+files. The copy therefore drops the encrypted hashes and keeps the
+HMACs; Chrome validates on the HMACs and writes encrypted hashes of its
+own (measured on macOS with Chrome 158.0.8127.37).
+
 Each profile is named after its account (alias or email) and given a
 window colour of its own by slot, through the untracked `Preferences`
 keys, so two accounts' browsers are told apart at a glance; the last
@@ -82,10 +92,10 @@ moved profile takes its new slot's window colour and keeps its name.
 
 diff --git a/src/claude_swap/chrome.py b/src/claude_swap/chrome.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..b195bfef3529c37df0a057ea859e0690fb9a3db6
+index 0000000000000000000000000000000000000000..0cba423ce2136716a1984288716d8072eb94261a
 --- /dev/null
 +++ b/src/claude_swap/chrome.py
-@@ -0,0 +1,891 @@
+@@ -0,0 +1,957 @@
 +"""Chrome with Claude in Chrome, one browser profile per stored account.
 +
 +``cswap switch`` moves Claude Code to another account, but the Claude in
@@ -438,6 +448,69 @@ index 0000000000000000000000000000000000000000..b195bfef3529c37df0a057ea859e0690
 +    return copied
 +
 +
++# Chrome guards some preferences against edits from outside (every
++# extension's record, the homepage, the search provider, the startup pages)
++# with two integrity values each under ``protection``: an HMAC, and a hash
++# encrypted with the browser's OS key, kept in keys ending in this suffix.
++_ENCRYPTED_HASH_SUFFIX = "encrypted_hash"
++PROTECTED_PREFS_FILES: tuple[str, ...] = ("Secure Preferences", "Preferences")
++
++
++def _prune_encrypted_hashes(node: dict) -> int:
++    removed = 0
++    for key in list(node):
++        if key.endswith(_ENCRYPTED_HASH_SUFFIX):
++            del node[key]
++            removed += 1
++        elif isinstance(node[key], dict):
++            removed += _prune_encrypted_hashes(node[key])
++    return removed
++
++
++def drop_encrypted_pref_hashes(profile_dir: Path) -> int:
++    """Remove the encrypted integrity hashes from a copied profile's
++    preference files and keep the HMACs. Returns the number of keys removed.
++
++    A browser started with ``--user-data-dir`` does not accept the encrypted
++    hashes the stock profile wrote. It then resets every guarded preference
++    a moment after it starts: each extension loses its record, so the
++    extensions page reports it as corrupted and its files are deleted, and
++    the homepage, search provider, pinned tabs and startup pages go back to
++    their defaults. The HMACs of the same values are accepted, and with the
++    encrypted hashes gone Chrome validates on those alone and writes
++    encrypted hashes of its own.
++
++    Measured on macOS with Chrome 158.0.8127.37: ``Preferences``,
++    ``Secure Preferences`` and ``Extensions`` copied out of the stock
++    profile had 45 preferences reset on the first start; the same copy
++    without these keys had none on the first start or the second, kept all
++    33 extension records, and had its encrypted hashes back.
++
++    A file that is missing or is not JSON is left as it is.
++
++    Raises:
++        OSError: a preference file could not be rewritten.
++    """
++    removed = 0
++    for name in PROTECTED_PREFS_FILES:
++        path = profile_dir / name
++        try:
++            prefs = json.loads(path.read_text(encoding="utf-8"))
++        except (OSError, ValueError):
++            continue
++        protection = prefs.get("protection") if isinstance(prefs, dict) else None
++        if not isinstance(protection, dict):
++            continue
++        count = _prune_encrypted_hashes(protection)
++        if count:
++            path.write_text(
++                json.dumps(prefs, ensure_ascii=False, separators=(",", ":")),
++                encoding="utf-8",
++            )
++            removed += count
++    return removed
++
++
 +# The extension's own storage (``chrome.storage.local``): its account uuid,
 +# consent and sign-in state live here, so a resync carries it over.
 +CLAUDE_EXTENSION_STATE = Path("Local Extension Settings") / CLAUDE_EXTENSION_ID
@@ -681,7 +754,8 @@ index 0000000000000000000000000000000000000000..b195bfef3529c37df0a057ea859e0690
 +
 +    def _copy_stock(self, src: Path, dest: Path, data_dir: Path) -> None:
 +        """Copy the stock profile ``src`` into ``dest`` minus its claude.ai
-+        cookies, printing what was done.
++        cookies and the encrypted preference hashes a copy cannot carry,
++        printing what was done.
 +
 +        Raises:
 +            ConfigError: the stock profile cannot be read (macOS Full Disk
@@ -703,6 +777,8 @@ index 0000000000000000000000000000000000000000..b195bfef3529c37df0a057ea859e0690
 +                "retry, or run 'cswap config set chrome.cloneStockProfile "
 +                "false' to start this account from an empty profile"
 +            ) from exc
++        # Or the copy's extensions are reset on its first start.
++        drop_encrypted_pref_hashes(dest)
 +        stock = src.parent
 +        if self.platform == Platform.WINDOWS and (stock / "Local State").is_file():
 +            # Holds the key the cookie jar is encrypted with there.
@@ -1893,10 +1969,10 @@ index 0000000000000000000000000000000000000000..af9d2915ce31ba7b6d1f1441bec2a8e6
 +        assert "chrome --quit <num|email>" in out
 diff --git a/tests/test_chrome_profile.py b/tests/test_chrome_profile.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..c4b8ae41a9ca5e5581219a58d67188472573d230
+index 0000000000000000000000000000000000000000..b8a3933ddd7dede02673a268b3ae51cce81b6ab9
 --- /dev/null
 +++ b/tests/test_chrome_profile.py
-@@ -0,0 +1,566 @@
+@@ -0,0 +1,653 @@
 +"""``cswap chrome`` first-open preparation: the new account's profile is a
 +copy of the stock Chrome's last-used profile minus its claude.ai cookies,
 +named after the account, with a window colour of its own; and
@@ -1923,6 +1999,7 @@ index 0000000000000000000000000000000000000000..c4b8ae41a9ca5e5581219a58d6718847
 +    ChromeManager,
 +    brand_profile,
 +    clone_profile,
++    drop_encrypted_pref_hashes,
 +    last_used_profile,
 +    profile_color,
 +    strip_claude_cookies,
@@ -1958,6 +2035,32 @@ index 0000000000000000000000000000000000000000..c4b8ae41a9ca5e5581219a58d6718847
 +        return sorted(r[0] for r in conn.execute("SELECT host_key FROM cookies"))
 +    finally:
 +        conn.close()
++
++
++def _secure_prefs(profile: Path) -> dict:
++    """Write a ``Secure Preferences`` shaped like Chrome's and return it:
++    every guarded preference carries an HMAC and an encrypted hash."""
++    ext = "a" * 32
++    prefs = {
++        "extensions": {"settings": {ext: {"path": f"{ext}/1.0_0"}}},
++        "homepage": "https://example.com/",
++        "protection": {
++            "macs": {
++                "extensions": {
++                    "settings": {ext: "MAC1"},
++                    "settings_encrypted_hash": {ext: "ENC1"},
++                    "ui": {"developer_mode_encrypted_hash": "ENC2"},
++                },
++                "homepage": "MAC2",
++                "homepage_encrypted_hash": "ENC3",
++            },
++            "super_mac": "MAC3",
++            "super_encrypted_hash": "ENC4",
++        },
++    }
++    profile.mkdir(parents=True, exist_ok=True)
++    (profile / "Secure Preferences").write_text(json.dumps(prefs))
++    return prefs
 +
 +
 +@pytest.fixture
@@ -2090,6 +2193,45 @@ index 0000000000000000000000000000000000000000..c4b8ae41a9ca5e5581219a58d6718847
 +            check_cookie_jars(tmp_path)
 +
 +
++class TestDropEncryptedHashes:
++    def test_removes_encrypted_hashes_and_keeps_the_macs(self, tmp_path):
++        before = _secure_prefs(tmp_path)
++        assert drop_encrypted_pref_hashes(tmp_path) == 4
++        after = json.loads((tmp_path / "Secure Preferences").read_text())
++        ext = "a" * 32
++        assert after["protection"] == {
++            "macs": {
++                "extensions": {"settings": {ext: "MAC1"}, "ui": {}},
++                "homepage": "MAC2",
++            },
++            "super_mac": "MAC3",
++        }
++        # the guarded values themselves are what the HMACs cover: untouched
++        assert after["extensions"] == before["extensions"]
++        assert after["homepage"] == before["homepage"]
++
++    def test_only_looks_under_protection(self, tmp_path):
++        (tmp_path / "Preferences").write_text(json.dumps({
++            "site_encrypted_hash": "a user value", "protection": {"macs": {}},
++        }))
++        raw = (tmp_path / "Preferences").read_text()
++        assert drop_encrypted_pref_hashes(tmp_path) == 0
++        assert (tmp_path / "Preferences").read_text() == raw  # not rewritten
++
++    def test_preferences_file_is_covered_too(self, tmp_path):
++        (tmp_path / "Preferences").write_text(json.dumps({
++            "protection": {"macs": {"homepage_encrypted_hash": "ENC"}},
++        }))
++        assert drop_encrypted_pref_hashes(tmp_path) == 1
++
++    def test_missing_or_broken_files_are_left_alone(self, tmp_path):
++        assert drop_encrypted_pref_hashes(tmp_path) == 0
++        (tmp_path / "Secure Preferences").write_text("{not json")
++        (tmp_path / "Preferences").write_text("[]")
++        assert drop_encrypted_pref_hashes(tmp_path) == 0
++        assert (tmp_path / "Secure Preferences").read_text() == "{not json"
++
++
 +class TestBrand:
 +    def test_names_and_colours_an_existing_preferences_file(self, tmp_path):
 +        (tmp_path / "Preferences").write_text(json.dumps({
@@ -2135,6 +2277,18 @@ index 0000000000000000000000000000000000000000..c4b8ae41a9ca5e5581219a58d6718847
 +        out = _plain(capsys.readouterr().out)
 +        assert "copied 6 file(s) from Profile 2, dropped 3 claude.ai cookie(s)" in out
 +        assert "copy of your Chrome profile" in out and "side panel" in out
++
++    def test_copy_drops_the_encrypted_hashes_the_stock_profile_keeps(self, manager, stock):
++        _secure_prefs(stock / "Profile 2")
++        with patch.object(chrome, "stock_user_data_dir", return_value=stock), \
++             patch.object(chrome, "stock_instance_running", return_value=False), \
++             patch.object(chrome, "running_pids", return_value=[]), \
++             patch.object(chrome, "launch"):
++            assert manager.open(["2"]) == 0
++        default = manager.data_dir("2", "account2@example.com") / "Default"
++        copied = (default / "Secure Preferences").read_text()
++        assert "MAC1" in copied and "encrypted_hash" not in copied
++        assert "encrypted_hash" in (stock / "Profile 2" / "Secure Preferences").read_text()
 +
 +    def test_alias_names_the_profile(self, manager, stock, switcher):
 +        data = switcher._get_sequence_data()
@@ -2320,6 +2474,15 @@ index 0000000000000000000000000000000000000000..c4b8ae41a9ca5e5581219a58d6718847
 +        assert leftovers == []
 +        out = _plain(capsys.readouterr().out)
 +        assert "2. account2@example.com synced (1 claude.ai cookie(s) and the extension state kept)" in out
++
++    def test_resynced_copy_drops_the_encrypted_hashes(self, manager, stock, opened):
++        _secure_prefs(stock / "Profile 2")
++        with patch.object(chrome, "stock_user_data_dir", return_value=stock), \
++             patch.object(chrome, "stock_instance_running", return_value=False), \
++             patch.object(chrome, "running_pids", return_value=[]):
++            assert manager.sync(["2"]) == 0
++        copied = (opened / "Secure Preferences").read_text()
++        assert "MAC1" in copied and "encrypted_hash" not in copied
 +
 +    def test_refuses_while_the_browser_is_open(self, manager, stock, opened, capsys):
 +        with patch.object(chrome, "stock_user_data_dir", return_value=stock), \
