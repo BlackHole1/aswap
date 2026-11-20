@@ -175,10 +175,10 @@ index 848754ecd43a0adda0e7aa1e972f32314fd9b448..4c40e8e457d78ee6dbe07ce383b66f5c
  
 diff --git a/src/claude_swap/desktop.py b/src/claude_swap/desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..cd1bfce3dff283eae95d8617c126d1d49e5f40a5
+index 0000000000000000000000000000000000000000..980868b2f626d1a92daa6f1c0c30a917e89d97d5
 --- /dev/null
 +++ b/src/claude_swap/desktop.py
-@@ -0,0 +1,782 @@
+@@ -0,0 +1,805 @@
 +"""Claude Desktop, one window per stored account.
 +
 +Claude Desktop holds one login per profile: to use a second account the
@@ -230,6 +230,8 @@ index 0000000000000000000000000000000000000000..cd1bfce3dff283eae95d8617c126d1d4
 +
 +DESKTOP_DIRNAME = "desktop"
 +USER_DATA_FLAG = "--user-data-dir"
++# On every process Chromium starts for itself, never on the main one.
++_CHILD_TYPE_FLAG = " --type="
 +QUIT_TIMEOUT_S = 5.0
 +# Where a profile waits between its old slot's name and its new one.
 +RELOCATING_SUFFIX = ".relocating"
@@ -331,8 +333,14 @@ index 0000000000000000000000000000000000000000..cd1bfce3dff283eae95d8617c126d1d4
 +
 +
 +def stock_instance_running(app: Path, platform: Platform | None = None) -> bool:
-+    """Is Claude Desktop open on the stock profile: the app's own binary
-+    started with no ``--user-data-dir``? Best effort, POSIX only."""
++    """Is Claude Desktop open on the stock profile: the app's main process
++    started with no ``--user-data-dir``? Best effort, POSIX only.
++
++    Only the main process counts. An instance on another profile also runs
++    programs from inside the app that never carry the flag (the crash
++    handler, the wrapper around each Claude Code session), and so does
++    whoever else starts one (Chrome, for the app's native messaging host).
++    """
 +    platform = platform or Platform.detect()
 +    if platform == Platform.WINDOWS:
 +        return False
@@ -342,11 +350,26 @@ index 0000000000000000000000000000000000000000..cd1bfce3dff283eae95d8617c126d1d4
 +        )
 +    except (OSError, subprocess.TimeoutExpired):
 +        return False
-+    prefix = str(app)
-+    for line in proc.stdout.splitlines():
-+        if line.startswith(prefix) and USER_DATA_FLAG not in line:
-+            return True
-+    return False
++    return any(
++        _is_main_process(line, app) and USER_DATA_FLAG not in line
++        for line in proc.stdout.splitlines()
++    )
++
++
++def _is_main_process(command: str, app: Path) -> bool:
++    """Is the command line that of ``app``'s main process?
++
++    A macOS bundle keeps its main executable, and nothing else, in
++    ``Contents/MacOS``; anywhere else ``app`` is the executable itself.
++    Chromium starts its helpers from the same executable on Linux, always
++    with a ``--type=``, which the main process never has.
++    """
++    if _CHILD_TYPE_FLAG in command:
++        return False
++    if app.suffix == ".app":
++        return command.startswith(f"{app}/Contents/MacOS/")
++    exe = str(app)
++    return command == exe or command.startswith(exe + " ")
 +
 +
 +def _user_data_arg(data_dir: Path) -> str:
@@ -1285,10 +1308,10 @@ index 3ffd6def7986e478a9570d74334bf8f6be0d11cf..eb255acc94840a65b2bc5f0703a233c2
          # An unset weekly line reports null, not the threshold it falls back
 diff --git a/tests/test_desktop.py b/tests/test_desktop.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..cc6d866b1ba8ff45176275424dc88ed1ae059854
+index 0000000000000000000000000000000000000000..9822723caf3bcbab6e4730001a3fa9bed739b176
 --- /dev/null
 +++ b/tests/test_desktop.py
-@@ -0,0 +1,878 @@
+@@ -0,0 +1,911 @@
 +"""``cswap desktop``: Claude Desktop, one window per stored account.
 +
 +Claude Desktop keeps one login per profile, and Electron honors
@@ -1860,6 +1883,39 @@ index 0000000000000000000000000000000000000000..cc6d866b1ba8ff45176275424dc88ed1
 +            run.return_value = MagicMock(stdout=both.splitlines()[0] + "\n")
 +            assert not desktop.stock_instance_running(app, Platform.MACOS)
 +        assert run.call_args.args[0][:2] == ["ps", "-axo"]
++
++    def test_stock_instance_ignores_what_another_profile_runs(self):
++        # Everything a window on another profile leaves in the process
++        # list without the flag, plus the host Chrome starts on its own.
++        app = PurePosixPath("/Applications/Claude.app")
++        contents = "/Applications/Claude.app/Contents"
++        others = (
++            f"{contents}/MacOS/Claude --user-data-dir=/x/2-b\n"
++            f"{contents}/Frameworks/Electron Framework.framework/Helpers/"
++            "chrome_crashpad_handler --no-rate-limit --database=/x/2-b/Crashpad\n"
++            f"{contents}/Helpers/disclaimer --pgroup -- /x/2-b/claude-code/claude\n"
++            f"{contents}/Helpers/chrome-native-host chrome-extension://abc/\n"
++        )
++        with patch.object(desktop.subprocess, "run") as run:
++            run.return_value = MagicMock(stdout=others)
++            assert not desktop.stock_instance_running(app, Platform.MACOS)
++            run.return_value = MagicMock(stdout=others + f"{contents}/MacOS/Claude\n")
++            assert desktop.stock_instance_running(app, Platform.MACOS)
++
++    def test_stock_instance_of_a_bare_executable(self):
++        # Off macOS the app is the executable, which its helpers share.
++        app = PurePosixPath("/opt/claude/claude")
++        others = (
++            "/opt/claude/claude --user-data-dir=/x/2-b\n"
++            "/opt/claude/claude --type=zygote --no-zygote-sandbox\n"
++            "/opt/claude/claude_crashpad_handler --database=/x/2-b/Crashpad\n"
++        )
++        with patch.object(desktop.subprocess, "run") as run:
++            run.return_value = MagicMock(stdout=others)
++            assert not desktop.stock_instance_running(app, Platform.LINUX)
++            for stock in ("/opt/claude/claude\n", "/opt/claude/claude --no-sandbox\n"):
++                run.return_value = MagicMock(stdout=others + stock)
++                assert desktop.stock_instance_running(app, Platform.LINUX)
 +
 +    def test_stock_uuid_reads_config_json(self, tmp_path):
 +        assert desktop.stock_account_uuid(tmp_path) is None
