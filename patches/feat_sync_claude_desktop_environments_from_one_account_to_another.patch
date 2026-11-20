@@ -155,7 +155,7 @@ index 3c0926d3f62629fdcf7d5ee4c48a449955ecaa81..3707e2e923d2afb71ddc1778686385fa
    %(prog)s chrome <num|email ...>     open Chrome as an account, own profile + extension
    %(prog)s chrome --all               one Chrome profile per account
 diff --git a/src/claude_swap/desktop.py b/src/claude_swap/desktop.py
-index cd1bfce3dff283eae95d8617c126d1d49e5f40a5..e5405bda4b4bda19f346446eb38148f9e47c4835 100644
+index 980868b2f626d1a92daa6f1c0c30a917e89d97d5..47db4e06a4f26aa163dbb6700a2e7ba9fbdc56be 100644
 --- a/src/claude_swap/desktop.py
 +++ b/src/claude_swap/desktop.py
 @@ -22,6 +22,10 @@ Those directories are keyed by account UUID one level down, so every
@@ -169,7 +169,7 @@ index cd1bfce3dff283eae95d8617c126d1d49e5f40a5..e5405bda4b4bda19f346446eb38148f9
  """
  
  from __future__ import annotations
-@@ -613,6 +617,17 @@ class DesktopManager:
+@@ -636,6 +640,17 @@ class DesktopManager:
              "--all opens every account; --quit closes them."
          ))
  
