@@ -63,10 +63,10 @@ profile's database and three files are copied under
 (the newest three runs are kept) and put back if a step fails.
 
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index 3c0926d3f62629fdcf7d5ee4c48a449955ecaa81..3707e2e923d2afb71ddc1778686385fa0805c86a 100644
+index 619de11bc035e96f7f237100eac841f02c288c75..bd7b7e50faff2f0195ea8f1d6febbd189d00eaaf 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
-@@ -405,7 +405,7 @@ def _refresh_command(argv: list[str]) -> None:
+@@ -443,7 +443,7 @@ def _refresh_command(argv: list[str]) -> None:
  
  
  def _desktop_command(argv: list[str]) -> None:
@@ -75,7 +75,7 @@ index 3c0926d3f62629fdcf7d5ee4c48a449955ecaa81..3707e2e923d2afb71ddc1778686385fa
  
      Claude Desktop keeps one login per profile, so a second account means
      signing the first one out. Each stored account gets its own permanent
-@@ -423,9 +423,14 @@ def _desktop_command(argv: list[str]) -> None:
+@@ -461,9 +461,14 @@ def _desktop_command(argv: list[str]) -> None:
              "shows a sign-in: sign in to that account once, and it stays "
              "signed in. Several accounts can be open at once. The Code tab's "
              "local sessions are shared with the stock profile (setting "
@@ -93,7 +93,7 @@ index 3c0926d3f62629fdcf7d5ee4c48a449955ecaa81..3707e2e923d2afb71ddc1778686385fa
          ),
          formatter_class=argparse.RawDescriptionHelpFormatter,
          epilog="""
-@@ -435,6 +440,9 @@ Examples:
+@@ -473,6 +478,9 @@ Examples:
    cswap desktop work personal   # by alias or email; several at once
    cswap desktop --all           # every account, one window each
    cswap desktop --quit 2        # close account 2's window
@@ -103,7 +103,7 @@ index 3c0926d3f62629fdcf7d5ee4c48a449955ecaa81..3707e2e923d2afb71ddc1778686385fa
    cswap config set desktop.appPath /path/to/Claude.app   # non-standard install
          """,
      )
-@@ -451,12 +459,31 @@ Examples:
+@@ -489,12 +497,31 @@ Examples:
          "--quit", action="store_true",
          help="Close the given accounts' windows instead of opening them",
      )
@@ -137,7 +137,7 @@ index 3c0926d3f62629fdcf7d5ee4c48a449955ecaa81..3707e2e923d2afb71ddc1778686385fa
  
      try:
          switcher = ClaudeAccountSwitcher(debug=args.debug)
-@@ -467,6 +494,8 @@ Examples:
+@@ -505,6 +532,8 @@ Examples:
          manager = DesktopManager(switcher)
          if args.quit:
              code = manager.quit(args.accounts, args.all)
@@ -146,7 +146,7 @@ index 3c0926d3f62629fdcf7d5ee4c48a449955ecaa81..3707e2e923d2afb71ddc1778686385fa
          elif args.all or args.accounts:
              code = manager.open(args.accounts, args.all)
          else:
-@@ -1734,6 +1763,7 @@ Commands:
+@@ -1772,6 +1801,7 @@ Commands:
    %(prog)s desktop <num|email ...>    open Claude Desktop as an account, own window
    %(prog)s desktop --all              one Claude Desktop window per account
    %(prog)s desktop --quit <num|email> close an account's Claude Desktop window
@@ -1504,46 +1504,11 @@ index 0000000000000000000000000000000000000000..6bc32ba76c73bf212916139938cd29ea
 +        yield
 +    finally:
 +        handle.close()
-diff --git a/src/claude_swap/macos_keychain.py b/src/claude_swap/macos_keychain.py
-index e4270a6226b82df1a7a91aaa2b1aa9bf04202675..78084d2cfc0ec72d3d230a24383e626a1657e2ff 100644
---- a/src/claude_swap/macos_keychain.py
-+++ b/src/claude_swap/macos_keychain.py
-@@ -106,23 +106,26 @@ def _quote(value: str) -> str:
-     return f'"{escaped}"'
- 
- 
--def get_password(service: str, account: str) -> str | None:
-+def get_password(
-+    service: str, account: str, *, timeout: float = _TIMEOUT
-+) -> str | None:
-     """Return the stored password, or ``None`` if no such item exists (rc 44).
- 
-     Raises :class:`KeychainError` on any other non-zero exit (locked / denied /
-     unavailable) or a timeout, so a genuine miss is not confused with a transient
--    failure.
-+    failure. ``timeout`` is for an item another application created: macOS asks
-+    the user before handing that over, and the answer takes longer than a read.
-     """
-     try:
-         result = spawn.run(
-             [_SECURITY, "find-generic-password", "-a", account, "-w", "-s", service],
-             capture_output=True,
-             text=True,
--            timeout=_TIMEOUT,
-+            timeout=timeout,
-         )
-     except subprocess.TimeoutExpired as e:
-         raise KeychainError(
--            f"security find-generic-password timed out after {_TIMEOUT}s"
-+            f"security find-generic-password timed out after {timeout}s"
-         ) from e
-     if result.returncode == 0:
-         # `-w` prints the value followed by one newline; strip exactly that so
 diff --git a/src/claude_swap/settings.py b/src/claude_swap/settings.py
-index d7dae81787a390bda3031ad56f4b7287d4a6ab2d..3bdf2b6d5992397627f96a66165e9f79319e5285 100644
+index 65309f718b708d32df71d043f15a1812d7dd1a52..edef6c0e4678ad093ca016d4e74a9a2658ce5f12 100644
 --- a/src/claude_swap/settings.py
 +++ b/src/claude_swap/settings.py
-@@ -139,10 +139,14 @@ class DesktopSettings:
+@@ -142,10 +142,14 @@ class DesktopSettings:
      tab's local sessions, agent-mode state, Spaces keys) from the stock
      profile into every account's profile, so a window opened through cswap
      lists the same local sessions as the stock app. Not on Windows.
@@ -1558,7 +1523,7 @@ index d7dae81787a390bda3031ad56f4b7287d4a6ab2d..3bdf2b6d5992397627f96a66165e9f79
  
  
  @dataclass(frozen=True)
-@@ -272,6 +276,10 @@ SETTING_SPECS: dict[str, SettingSpec] = {
+@@ -279,6 +283,10 @@ SETTING_SPECS: dict[str, SettingSpec] = {
              "desktop", "shareSessions", "share_sessions", "bool",
              help="cswap desktop shares the stock profile's local sessions with every account",
          ),
@@ -1569,7 +1534,7 @@ index d7dae81787a390bda3031ad56f4b7287d4a6ab2d..3bdf2b6d5992397627f96a66165e9f79
          SettingSpec(
              "chrome", "appPath", "app_path", "string",
              help="Browser that cswap chrome opens (default: the stock Google Chrome install)",
-@@ -637,7 +645,20 @@ def load_desktop_settings(backup_root: Path) -> DesktopSettings:
+@@ -647,7 +655,20 @@ def load_desktop_settings(backup_root: Path) -> DesktopSettings:
              share_sessions, default.share_sessions,
          )
          share_sessions = default.share_sessions
@@ -1591,26 +1556,11 @@ index d7dae81787a390bda3031ad56f4b7287d4a6ab2d..3bdf2b6d5992397627f96a66165e9f79
  
  
  def load_chrome_settings(backup_root: Path) -> ChromeSettings:
-diff --git a/tests/conftest.py b/tests/conftest.py
-index cbc8a995e5885bf174fbcaf1e63e9b53e5bdee94..f089887af41d8e8c2dfbfe9acfc09abcb3fef81c 100644
---- a/tests/conftest.py
-+++ b/tests/conftest.py
-@@ -451,7 +451,9 @@ class _KeychainStore:
-         self.data: dict[tuple[str, str], str] = {}
- 
-     # Mirrors the ``macos_keychain`` (security CLI) contract.
--    def get_password(self, service: str, account: str) -> str | None:
-+    def get_password(
-+        self, service: str, account: str, *, timeout: float | None = None
-+    ) -> str | None:
-         return self.data.get((service, account))
- 
-     def item_exists(self, service: str, account: str) -> bool:
 diff --git a/tests/test_config_cli.py b/tests/test_config_cli.py
-index db51e0a7bc8de911035fe6985a9eec6cf45ffc71..b71c7ad9571eebfdc7ee7820fc33d28ec3258640 100644
+index aa0ca35b95b6e3f1832bb3e1a503b31edfc83316..b595632ec6f6c2891ae3d20eed8799889dca0841 100644
 --- a/tests/test_config_cli.py
 +++ b/tests/test_config_cli.py
-@@ -56,12 +56,13 @@ class TestConfigList:
+@@ -57,12 +57,13 @@ class TestConfigList:
              "usage.fableProbe",
              "desktop.appPath",
              "desktop.shareSessions",
@@ -1620,17 +1570,17 @@ index db51e0a7bc8de911035fe6985a9eec6cf45ffc71..b71c7ad9571eebfdc7ee7820fc33d28e
              "chrome.followSwitch",
          ):
              assert key in out
--        assert out.count("(default)") == 19
-+        assert out.count("(default)") == 20
+-        assert out.count("(default)") == 20
++        assert out.count("(default)") == 21
  
      def test_set_key_not_marked_default(self, temp_home, capsys):
          _run(["set", "autoswitch.cooldownSeconds", "600"], capsys)
-@@ -88,7 +89,7 @@ class TestConfigList:
+@@ -89,7 +90,7 @@ class TestConfigList:
          assert payload["schemaVersion"] == 1
          assert payload["path"].endswith("settings.json")
          by_key = {entry["key"]: entry for entry in payload["settings"]}
--        assert len(by_key) == 19
-+        assert len(by_key) == 20
+-        assert len(by_key) == 20
++        assert len(by_key) == 21
          assert by_key["autoswitch.threshold"]["value"] == 90.0
          assert by_key["autoswitch.threshold"]["isSet"] is False
          # An unset weekly line reports null, not the threshold it falls back

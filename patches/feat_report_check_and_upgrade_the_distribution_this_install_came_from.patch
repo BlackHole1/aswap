@@ -47,10 +47,10 @@ index 8757fd107fb185fdece5753601164e475466b0de..6b9095b5167d031365aa00da0a7b40df
  from claude_swap.switcher import ClaudeAccountSwitcher
  
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index 854d81f2b3658543f03c67550ee500f2cd7d82e6..d4a3069b403d703e6a9cef096fc25ce10e089c5a 100644
+index 0a8f231209610e0cf5054d78fc515d26e8fdda01..e6c02594c4fdf0335f6fad087a5336200b22a2d3 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
-@@ -1184,15 +1184,17 @@ def _menubar_extra_missing() -> str | None:
+@@ -1222,15 +1222,17 @@ def _menubar_extra_missing() -> str | None:
  
      if importlib.util.find_spec("rumps") is not None:
          return None
