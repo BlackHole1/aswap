@@ -28,10 +28,10 @@ apart. Once `run.shareHistory` answers it is listed, with
 `run.shareHistory` as the name to use.
 
 diff --git a/src/claude_swap/settings.py b/src/claude_swap/settings.py
-index 6e6f1be480c6b5e7c9a0d1d7c80241fca5a3e15a..d7dae81787a390bda3031ad56f4b7287d4a6ab2d 100644
+index 49adba9111125e106ee9d987606bb4d4d5ca7436..65309f718b708d32df71d043f15a1812d7dd1a52 100644
 --- a/src/claude_swap/settings.py
 +++ b/src/claude_swap/settings.py
-@@ -453,6 +453,23 @@ def _unrecognized(raw: dict) -> list[UnrecognizedKey]:
+@@ -460,6 +460,23 @@ def _unrecognized(raw: dict) -> list[UnrecognizedKey]:
      for name, value in raw.items():
          if name == "schemaVersion":
              continue
@@ -55,7 +55,7 @@ index 6e6f1be480c6b5e7c9a0d1d7c80241fca5a3e15a..d7dae81787a390bda3031ad56f4b7287
          known = _SECTION_KEYS.get(name)
          if known is None:
              # A dotted setting name here is the spelling `cswap config`
-@@ -540,10 +557,20 @@ def explicit_share_history(backup_root: Path) -> bool | None:
+@@ -550,10 +567,20 @@ def explicit_share_history(backup_root: Path) -> bool | None:
      sharing on Windows) is dropped silently while a setting someone wrote
      earns a warning, and only a user who never chose is told that sharing is
      the default. A value that is not a boolean counts as never set.
@@ -80,10 +80,10 @@ index 6e6f1be480c6b5e7c9a0d1d7c80241fca5a3e15a..d7dae81787a390bda3031ad56f4b7287
  
  def load_update_settings(backup_root: Path) -> UpdateSettings:
 diff --git a/tests/test_settings.py b/tests/test_settings.py
-index 6949b1903bf30f8ddafc0565a035dcbf08991baa..c682c8778f02f98426ad9d6f89b98c32d0876561 100644
+index b8faa3fc588d842c9ad7cae2971fe3434502e206..8997d368ed44d7e4af0934157a7c621293dc386a 100644
 --- a/tests/test_settings.py
 +++ b/tests/test_settings.py
-@@ -212,6 +212,51 @@ class TestRunSettings:
+@@ -227,6 +227,51 @@ class TestRunSettings:
          assert explicit_share_history(tmp_path) is chosen
          assert load_run_settings(tmp_path).share_history is chosen
  

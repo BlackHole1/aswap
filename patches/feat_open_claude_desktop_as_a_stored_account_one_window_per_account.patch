@@ -56,10 +56,10 @@ files, each cached in its own memory, so nothing syncs live, their
 writes overwrite each other, and only a reload rereads from disk.
 
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index 848754ecd43a0adda0e7aa1e972f32314fd9b448..4c40e8e457d78ee6dbe07ce383b66f5cac174f74 100644
+index b93c50c40cc9ec649dd2de1e83e27f048587f7f7..d7374bf7e39b2eeefceef5b549485142101385c3 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
-@@ -404,6 +404,84 @@ def _refresh_command(argv: list[str]) -> None:
+@@ -442,6 +442,84 @@ def _refresh_command(argv: list[str]) -> None:
          sys.exit(code)
  
  
@@ -144,7 +144,7 @@ index 848754ecd43a0adda0e7aa1e972f32314fd9b448..4c40e8e457d78ee6dbe07ce383b66f5c
  def _unclaimed_command(argv: list[str]) -> None:
      """Handle `cswap unclaimed [--purge ID]` — inspect or drop a stash row.
  
-@@ -1476,6 +1554,9 @@ def main() -> None:
+@@ -1514,6 +1592,9 @@ def main() -> None:
      if argv and argv[0] == "refresh":
          _refresh_command(argv[1:])
          return
@@ -154,7 +154,7 @@ index 848754ecd43a0adda0e7aa1e972f32314fd9b448..4c40e8e457d78ee6dbe07ce383b66f5c
      if argv and argv[0] == "alias":
          _alias_command(argv[1:])
          return
-@@ -1527,6 +1608,10 @@ Commands:
+@@ -1565,6 +1646,10 @@ Commands:
    %(prog)s priority                   list account priorities
    %(prog)s run <num|email> [-- ...]   run as an account, this terminal only
    %(prog)s run                        run the current dir's mapped account
@@ -165,7 +165,7 @@ index 848754ecd43a0adda0e7aa1e972f32314fd9b448..4c40e8e457d78ee6dbe07ce383b66f5c
    %(prog)s map <num|email> [path]     map a directory to an account
    %(prog)s map                        list directory mappings
    %(prog)s unmap [path]               remove a directory mapping
-@@ -1560,6 +1645,7 @@ Aliases: ls=list  rm=remove  update=upgrade""",
+@@ -1598,6 +1683,7 @@ Aliases: ls=list  rm=remove  update=upgrade""",
    %(prog)s add --slot 3                      # add to a specific slot
    %(prog)s add-token sk-ant-oat01-... --email me@example.com
    %(prog)s run 2 -- --resume                 # forward args after '--' to claude
@@ -985,7 +985,7 @@ index 0000000000000000000000000000000000000000..980868b2f626d1a92daa6f1c0c30a917
 +            os.chmod(path, 0o700)
 +
 diff --git a/src/claude_swap/settings.py b/src/claude_swap/settings.py
-index 2590b372b3467f9e3e2a62c4537722802d7ce646..f2fb2bf656b457fc92d76c414d6676d0a7607b24 100644
+index ec6c6e9663bf17f82965cdb6dfd0ded73905a2ed..fabb7bb9211c75c10d4f5a39a9e879738bc37817 100644
 --- a/src/claude_swap/settings.py
 +++ b/src/claude_swap/settings.py
 @@ -2,8 +2,8 @@
@@ -999,7 +999,7 @@ index 2590b372b3467f9e3e2a62c4537722802d7ce646..f2fb2bf656b457fc92d76c414d6676d0
  Unknown keys (future fields, other tools' experiments) survive a round trip.
  
  Reading is forgiving — a missing or corrupt file yields defaults with a logged
-@@ -129,12 +129,29 @@ class UsageSettings:
+@@ -132,12 +132,29 @@ class UsageSettings:
      fable_probe: bool = False
  
  
@@ -1029,7 +1029,7 @@ index 2590b372b3467f9e3e2a62c4537722802d7ce646..f2fb2bf656b457fc92d76c414d6676d0
  }
  
  
-@@ -227,6 +244,14 @@ SETTING_SPECS: dict[str, SettingSpec] = {
+@@ -234,6 +251,14 @@ SETTING_SPECS: dict[str, SettingSpec] = {
              "usage", "fableProbe", "fable_probe", "bool",
              help="With usage.headerProbe, also read Fable's weekly limit from a 1-token Fable request (opt-in: uses Fable quota)",
          ),
@@ -1044,7 +1044,7 @@ index 2590b372b3467f9e3e2a62c4537722802d7ce646..f2fb2bf656b457fc92d76c414d6676d0
      )
  }
  
-@@ -531,6 +556,31 @@ def load_usage_settings(backup_root: Path) -> UsageSettings:
+@@ -541,6 +566,31 @@ def load_usage_settings(backup_root: Path) -> UsageSettings:
      return UsageSettings(**values)
  
  
@@ -1076,7 +1076,7 @@ index 2590b372b3467f9e3e2a62c4537722802d7ce646..f2fb2bf656b457fc92d76c414d6676d0
  def save_settings(backup_root: Path, settings: AutoSwitchSettings) -> None:
      """Write the autoswitch section, preserving unknown keys and sections."""
      path = settings_path(backup_root)
-@@ -705,6 +755,7 @@ def effective_settings(backup_root: Path) -> list[tuple[SettingSpec, object, boo
+@@ -715,6 +765,7 @@ def effective_settings(backup_root: Path) -> list[tuple[SettingSpec, object, boo
          "run": load_run_settings(backup_root),
          "updates": load_update_settings(backup_root),
          "usage": load_usage_settings(backup_root),
@@ -1085,10 +1085,10 @@ index 2590b372b3467f9e3e2a62c4537722802d7ce646..f2fb2bf656b457fc92d76c414d6676d0
      rows = []
      for spec in SETTING_SPECS.values():
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index 75fbffa22c22bafa4beaece98792345d70c5e043..9e44fa513bee88f83fea237f0ef3e16dcf6609e1 100644
+index 75ddfc6d5d9667bd21e0e5d0493b6fae9f0c79e9..b04208c3baa9d19e1e52c64e515f71712af29f79 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
-@@ -1066,6 +1066,55 @@ class ClaudeAccountSwitcher:
+@@ -1083,6 +1083,55 @@ class ClaudeAccountSwitcher:
          """Pre-commit clear that raises when the key still reads non-empty."""
          self._store.delete_account_credentials_strict(account_num, email)
  
@@ -1144,7 +1144,7 @@ index 75fbffa22c22bafa4beaece98792345d70c5e043..9e44fa513bee88f83fea237f0ef3e16d
      def _delete_account_files(self, account_num: str, email: str) -> None:
          """Delete all backup files for an account (credentials + config).
  
-@@ -1079,12 +1128,23 @@ class ClaudeAccountSwitcher:
+@@ -1096,12 +1145,23 @@ class ClaudeAccountSwitcher:
              SessionError: a live session-mode instance is using this account.
          """
          self._ensure_no_live_session(account_num, email, "the operation")
@@ -1168,7 +1168,7 @@ index 75fbffa22c22bafa4beaece98792345d70c5e043..9e44fa513bee88f83fea237f0ef3e16d
      def _prune_mappings(self, email: str, org_uuid: str) -> None:
          """Drop directory mappings for an identity that no longer has a slot.
  
-@@ -1329,6 +1389,8 @@ class ClaudeAccountSwitcher:
+@@ -1346,6 +1406,8 @@ class ClaudeAccountSwitcher:
          # under a running process.
          self._ensure_no_live_session(num_a, email_a, "--swap-accounts")
          self._ensure_no_live_session(num_b, email_b, "--swap-accounts")
@@ -1177,7 +1177,7 @@ index 75fbffa22c22bafa4beaece98792345d70c5e043..9e44fa513bee88f83fea237f0ef3e16d
  
          # A profile that rotated past its backup advances the backup first:
          # the backup is what moves, and the profile's Keychain item is deleted
-@@ -1350,6 +1412,8 @@ class ClaudeAccountSwitcher:
+@@ -1367,6 +1429,8 @@ class ClaudeAccountSwitcher:
          config_b = self._read_account_config(num_b, email_b)
  
          staging: dict[str, Path] = {}
@@ -1186,7 +1186,7 @@ index 75fbffa22c22bafa4beaece98792345d70c5e043..9e44fa513bee88f83fea237f0ef3e16d
          try:
              if email_a == email_b:
                  # Same email: the two slots' backup keys fully overlap, so
-@@ -1365,6 +1429,7 @@ class ClaudeAccountSwitcher:
+@@ -1382,6 +1446,7 @@ class ClaudeAccountSwitcher:
              # accounts share an email the two paths swap directly, so stage the
              # first through a temporary name.
              self._swap_session_dirs(num_a, email_a, num_b, email_b)
@@ -1194,7 +1194,7 @@ index 75fbffa22c22bafa4beaece98792345d70c5e043..9e44fa513bee88f83fea237f0ef3e16d
  
              # Set each destination key to its owner's exact state: write
              # material that exists, actively clear what doesn't. An empty
-@@ -1409,6 +1474,7 @@ class ClaudeAccountSwitcher:
+@@ -1426,6 +1491,7 @@ class ClaudeAccountSwitcher:
              # The commit point: _write_json's rename publishes the swap.
              self._write_json(self.sequence_file, data)
          except BaseException:
@@ -1202,7 +1202,7 @@ index 75fbffa22c22bafa4beaece98792345d70c5e043..9e44fa513bee88f83fea237f0ef3e16d
              self._rollback_swap(
                  num_a, email_a, creds_a, config_a,
                  num_b, email_b, creds_b, config_b,
-@@ -1788,6 +1854,7 @@ class ClaudeAccountSwitcher:
+@@ -1805,6 +1871,7 @@ class ClaudeAccountSwitcher:
          # Relocating backups/session under a live session-mode claude would
          # pull state out from under a running process.
          self._ensure_no_live_session(num_src, email, "--move-account")
@@ -1210,7 +1210,7 @@ index 75fbffa22c22bafa4beaece98792345d70c5e043..9e44fa513bee88f83fea237f0ef3e16d
  
          # Same as swap: the backup is what moves, and the profile's Keychain
          # item is deleted with the old slot key, so a profile that rotated
-@@ -1805,6 +1872,8 @@ class ClaudeAccountSwitcher:
+@@ -1822,6 +1889,8 @@ class ClaudeAccountSwitcher:
  
          src_dir = self._session_dir(num_src, email)
          dst_dir = self._session_dir(target, email)
@@ -1219,7 +1219,7 @@ index 75fbffa22c22bafa4beaece98792345d70c5e043..9e44fa513bee88f83fea237f0ef3e16d
          try:
              # Move the session profile to the account's new slot key, best
              # effort: a profile that cannot be moved is pruned below with the
-@@ -1818,6 +1887,7 @@ class ClaudeAccountSwitcher:
+@@ -1835,6 +1904,7 @@ class ClaudeAccountSwitcher:
                      self._logger.warning(
                          f"Session profile move skipped during move: {e}"
                      )
@@ -1227,7 +1227,7 @@ index 75fbffa22c22bafa4beaece98792345d70c5e043..9e44fa513bee88f83fea237f0ef3e16d
  
              # Set the target key to the account's exact state: write material
              # that exists, actively clear what doesn't — an unbacked account
-@@ -1852,6 +1922,7 @@ class ClaudeAccountSwitcher:
+@@ -1869,6 +1939,7 @@ class ClaudeAccountSwitcher:
              # Pre-commit failure: the records still point at num_src and its
              # keys are untouched — drop any strays written under the target
              # key and put the session profile back, best effort.
@@ -1235,7 +1235,7 @@ index 75fbffa22c22bafa4beaece98792345d70c5e043..9e44fa513bee88f83fea237f0ef3e16d
              try:
                  self._delete_account_credentials(target, email)
                  self._delete_config_backup(target, email)
-@@ -8714,6 +8785,24 @@ class ClaudeAccountSwitcher:
+@@ -8851,6 +8922,24 @@ class ClaudeAccountSwitcher:
                  "would pull a live profile out from under it. Repair or remove "
                  "them, then retry --purge."
              )
@@ -1260,7 +1260,7 @@ index 75fbffa22c22bafa4beaece98792345d70c5e043..9e44fa513bee88f83fea237f0ef3e16d
  
          warning("This will remove ALL claude-swap data from your system:")
          print(f"  - Backup directory: {self.backup_dir}")
-@@ -8751,6 +8840,8 @@ class ClaudeAccountSwitcher:
+@@ -8888,6 +8977,8 @@ class ClaudeAccountSwitcher:
                  )
              )
              print(dimmed("    Copy them somewhere else first if you want them."))
@@ -1269,7 +1269,7 @@ index 75fbffa22c22bafa4beaece98792345d70c5e043..9e44fa513bee88f83fea237f0ef3e16d
          print()
          print(dimmed("Note: This does NOT affect your current Claude Code login."))
          print()
-@@ -8823,6 +8914,10 @@ class ClaudeAccountSwitcher:
+@@ -8960,6 +9051,10 @@ class ClaudeAccountSwitcher:
              removed_items.append(
                  f"Session profiles: {', '.join(d.name for d in session_dirs)}"
              )
@@ -1281,10 +1281,10 @@ index 75fbffa22c22bafa4beaece98792345d70c5e043..9e44fa513bee88f83fea237f0ef3e16d
          # Remove backup directory
          if self.backup_dir.exists():
 diff --git a/tests/test_config_cli.py b/tests/test_config_cli.py
-index 3ffd6def7986e478a9570d74334bf8f6be0d11cf..eb255acc94840a65b2bc5f0703a233c2f33df76c 100644
+index d9745f80097a3bedb6e834f59afc1f4eaca2764f..86e17cff405e8df7a23135e83393d181fd88aa43 100644
 --- a/tests/test_config_cli.py
 +++ b/tests/test_config_cli.py
-@@ -54,9 +54,11 @@ class TestConfigList:
+@@ -55,9 +55,11 @@ class TestConfigList:
              "updates.check",
              "usage.headerProbe",
              "usage.fableProbe",
@@ -1292,17 +1292,17 @@ index 3ffd6def7986e478a9570d74334bf8f6be0d11cf..eb255acc94840a65b2bc5f0703a233c2
 +            "desktop.shareSessions",
          ):
              assert key in out
--        assert out.count("(default)") == 14
-+        assert out.count("(default)") == 16
+-        assert out.count("(default)") == 15
++        assert out.count("(default)") == 17
  
      def test_set_key_not_marked_default(self, temp_home, capsys):
          _run(["set", "autoswitch.cooldownSeconds", "600"], capsys)
-@@ -83,7 +85,7 @@ class TestConfigList:
+@@ -84,7 +86,7 @@ class TestConfigList:
          assert payload["schemaVersion"] == 1
          assert payload["path"].endswith("settings.json")
          by_key = {entry["key"]: entry for entry in payload["settings"]}
--        assert len(by_key) == 14
-+        assert len(by_key) == 16
+-        assert len(by_key) == 15
++        assert len(by_key) == 17
          assert by_key["autoswitch.threshold"]["value"] == 90.0
          assert by_key["autoswitch.threshold"]["isSet"] is False
          # An unset weekly line reports null, not the threshold it falls back
@@ -2224,7 +2224,7 @@ index 0000000000000000000000000000000000000000..9822723caf3bcbab6e4730001a3fa9be
 +        assert "desktop <num|email ...>" in out
 +        assert "desktop --quit <num|email>" in out
 diff --git a/tests/test_settings.py b/tests/test_settings.py
-index 819f11d5f146d9eb0616217e0d283b572f221a99..f846585d8199a2df708fd6ff4849e38a09b16f77 100644
+index 39123b265575e54eac967ca9124015e9a14327da..b2f6a761d12bfe8853f31a1790430a1a8b7d3375 100644
 --- a/tests/test_settings.py
 +++ b/tests/test_settings.py
 @@ -17,6 +17,7 @@ from claude_swap.settings import (
@@ -2235,7 +2235,7 @@ index 819f11d5f146d9eb0616217e0d283b572f221a99..f846585d8199a2df708fd6ff4849e38a
      RunSettings,
      UiSettings,
      UnrecognizedKey,
-@@ -314,6 +315,9 @@ class TestSettingSpecs:
+@@ -329,6 +330,9 @@ class TestSettingSpecs:
          assert by_section["usage"] == {
              f.name for f in UsageSettings.__dataclass_fields__.values()
          }
@@ -2245,7 +2245,7 @@ index 819f11d5f146d9eb0616217e0d283b572f221a99..f846585d8199a2df708fd6ff4849e38a
  
      def test_defaults_match_dataclass(self):
          sources = {
-@@ -322,6 +326,7 @@ class TestSettingSpecs:
+@@ -337,6 +341,7 @@ class TestSettingSpecs:
              "run": RunSettings(),
              "updates": UpdateSettings(),
              "usage": UsageSettings(),

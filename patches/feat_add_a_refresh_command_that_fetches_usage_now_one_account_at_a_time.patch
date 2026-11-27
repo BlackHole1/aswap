@@ -23,12 +23,14 @@ the server's Retry-After deadline (the local backoff when the server
 sent none, or sent 0, which on this endpoint marks a saturated budget
 rather than "retry now") and keeps its last measurement on screen.
 Exit code 1 when any requested account could not be refreshed.
+Rows are labelled like `list`'s, the organization tag following
+`ui.orgTag`.
 
 diff --git a/src/claude_swap/cli.py b/src/claude_swap/cli.py
-index d4a3069b403d703e6a9cef096fc25ce10e089c5a..848754ecd43a0adda0e7aa1e972f32314fd9b448 100644
+index e6c02594c4fdf0335f6fad087a5336200b22a2d3..b93c50c40cc9ec649dd2de1e83e27f048587f7f7 100644
 --- a/src/claude_swap/cli.py
 +++ b/src/claude_swap/cli.py
-@@ -364,6 +364,46 @@ def _unmap_command(argv: list[str]) -> None:
+@@ -402,6 +402,46 @@ def _unmap_command(argv: list[str]) -> None:
          sys.exit(130)
  
  
@@ -75,7 +77,7 @@ index d4a3069b403d703e6a9cef096fc25ce10e089c5a..848754ecd43a0adda0e7aa1e972f3231
  def _unclaimed_command(argv: list[str]) -> None:
      """Handle `cswap unclaimed [--purge ID]` — inspect or drop a stash row.
  
-@@ -1433,6 +1473,9 @@ def main() -> None:
+@@ -1471,6 +1511,9 @@ def main() -> None:
      if argv and argv[0] == "unclaimed":
          _unclaimed_command(argv[1:])
          return
@@ -85,7 +87,7 @@ index d4a3069b403d703e6a9cef096fc25ce10e089c5a..848754ecd43a0adda0e7aa1e972f3231
      if argv and argv[0] == "alias":
          _alias_command(argv[1:])
          return
-@@ -1469,6 +1512,7 @@ Commands:
+@@ -1507,6 +1550,7 @@ Commands:
    %(prog)s help                       show this help
    %(prog)s list                       list managed accounts
    %(prog)s status                     show current account
@@ -94,10 +96,10 @@ index d4a3069b403d703e6a9cef096fc25ce10e089c5a..848754ecd43a0adda0e7aa1e972f3231
    %(prog)s switch <num|email>         switch to a specific account
    %(prog)s add                        add the current account
 diff --git a/src/claude_swap/switcher.py b/src/claude_swap/switcher.py
-index 0e2fc9bec437496233e1bb970c544ee12b3a5c9c..75fbffa22c22bafa4beaece98792345d70c5e043 100644
+index 8a62953c5b843003f7cd6e7b37ab667837681ecf..75ddfc6d5d9667bd21e0e5d0493b6fae9f0c79e9 100644
 --- a/src/claude_swap/switcher.py
 +++ b/src/claude_swap/switcher.py
-@@ -385,6 +385,72 @@ def _usage_entry_lines(
+@@ -391,6 +391,72 @@ def _usage_entry_lines(
      return out
  
  
@@ -170,7 +172,7 @@ index 0e2fc9bec437496233e1bb970c544ee12b3a5c9c..75fbffa22c22bafa4beaece98792345d
  def _label_token_status(source: str, credentials: str) -> str | None:
      """Return ``oauth.build_token_status`` relabelled by credential source."""
      status = oauth.build_token_status(credentials)
-@@ -5947,9 +6013,17 @@ class ClaudeAccountSwitcher:
+@@ -6075,9 +6141,17 @@ class ClaudeAccountSwitcher:
          fetch: set[str] | None = None,
          *,
          scheduled: bool = False,
@@ -188,7 +190,7 @@ index 0e2fc9bec437496233e1bb970c544ee12b3a5c9c..75fbffa22c22bafa4beaece98792345d
          ``fetch=None`` (on-demand callers: ``--list``/``--status``/switch
          strategies, dashboards) makes every account a candidate but respects
          the persisted poll plans; the auto engine passes an explicit set whose
-@@ -6023,6 +6097,7 @@ class ClaudeAccountSwitcher:
+@@ -6151,6 +6225,7 @@ class ClaudeAccountSwitcher:
                  identities,
                  respect_plans=False,
                  repair_overslept=scheduled,
@@ -196,7 +198,7 @@ index 0e2fc9bec437496233e1bb970c544ee12b3a5c9c..75fbffa22c22bafa4beaece98792345d
              )
          # An expired ACTIVE credential that cannot reach the fetch path (and
          # its locked refresh) this tick — failure backoff, a concurrent
-@@ -6059,6 +6134,8 @@ class ClaudeAccountSwitcher:
+@@ -6187,6 +6262,8 @@ class ClaudeAccountSwitcher:
              accepted_records = {
                  num: record for num, record in records.items() if num in accepted
              }
@@ -205,7 +207,7 @@ index 0e2fc9bec437496233e1bb970c544ee12b3a5c9c..75fbffa22c22bafa4beaece98792345d
              for num, record in accepted_records.items():
                  if record.sentinel is not None:
                      sentinels[num] = record.sentinel
-@@ -6639,6 +6716,66 @@ class ClaudeAccountSwitcher:
+@@ -6769,6 +6846,69 @@ class ClaudeAccountSwitcher:
          except Exception:
              self._logger.debug("Failed to detect running instances", exc_info=True)
  
@@ -247,13 +249,16 @@ index 0e2fc9bec437496233e1bb970c544ee12b3a5c9c..75fbffa22c22bafa4beaece98792345d
 +            selected = list(by_num)
 +
 +        failed = 0
++        # The same rows as ``list``, so ``ui.orgTag`` decides the tag here too.
++        tag_mode = load_ui_settings(self.backup_dir).org_tag
++        emails = [info[1] for info in accounts_info]
 +        print(bolded("Accounts:"))
 +        for i, num in enumerate(selected):
 +            _n, email, org_name, org_uuid, is_active, _c, alias = by_num[num]
-+            tag = self._get_display_tag(email, org_name, org_uuid)
++            tag = self._tag_suffix(tag_mode, emails, email, org_name, org_uuid)
 +            label = f"{accent(alias)} ({email})" if alias else email
 +            marker = f" {bold_accent('(active)')}" if is_active else ""
-+            print(f"  {num}: {label} {muted(f'[{tag}]')}{marker}", flush=True)
++            print(f"  {num}: {label}{tag}{marker}", flush=True)
 +            # One collector pass per account: handing it the whole selection
 +            # would fetch them side by side and report nothing until the
 +            # slowest one answered.
@@ -345,10 +350,10 @@ index 1fb28e95cff2695460d6f021d3e847ee2b983067..6a839088606c9182dff2175f6382d75d
      next_poll_at = _num_or_none(row.get("nextPollAt"))
 diff --git a/tests/test_refresh_command.py b/tests/test_refresh_command.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..0aef5603fbbce772932cc34ef06d8413dc8a0475
+index 0000000000000000000000000000000000000000..f4a91fcbca0ac380c032da2a4188d693e4bec8cf
 --- /dev/null
 +++ b/tests/test_refresh_command.py
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,236 @@
 +"""``cswap refresh``: fetch usage on demand, one account at a time.
 +
 +``list`` serves a cached measurement while an account is fresh, not poll-due,
@@ -369,6 +374,7 @@ index 0000000000000000000000000000000000000000..0aef5603fbbce772932cc34ef06d8413
 +
 +from claude_swap import cli
 +from claude_swap.json_output import USAGE_API_KEY, USAGE_RELOGIN_REQUIRED
++from claude_swap.settings import settings_path
 +from claude_swap.switcher import (
 +    ClaudeAccountSwitcher,
 +    _deadline_note,
@@ -535,6 +541,18 @@ index 0000000000000000000000000000000000000000..0aef5603fbbce772932cc34ef06d8413
 +        assert fetched == ["2"] and "  1: " not in out
 +        _, _, fetched = _run(switcher, outcomes, ["account1@example.com", "2"], capsys=capsys)
 +        assert fetched == ["1", "2"]
++
++    @pytest.mark.parametrize("mode,tagged", [("auto", False), ("on", True), ("off", False)])
++    def test_org_tag_follows_ui_org_tag(self, switcher, capsys, mode, tagged):
++        """The rows are ``list``'s rows, so ``ui.orgTag`` decides the tag: two
++        accounts with different emails carry none unless it is ``on``."""
++        settings_path(switcher.backup_dir).write_text(json.dumps({"ui": {"orgTag": mode}}))
++        _, out, _ = _run(switcher, {
++            "1": FetchRecord(usage=USAGE_1), "2": FetchRecord(usage=USAGE_2),
++        }, capsys=capsys)
++        assert ("[personal]" in out) is tagged
++        # A hidden tag leaves no stray space behind.
++        assert ("  2: account2@example.com\n" in out) is not tagged
 +
 +    def test_unknown_account_is_an_error(self, switcher, capsys):
 +        code, out, fetched = _run(switcher, {}, ["nobody@example.com"], capsys=capsys)
